@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { Display } from "../../shared/types";
 import {
   canvasPositionsToLayout,
+  displayNodeDimensions,
   displaysToCanvasNodes,
   displayToLayoutDisplay,
   resolveScaleOptionForLayoutDisplay,
@@ -111,6 +112,30 @@ describe("layoutMath", () => {
 
   it("snaps points to a fixed grid", () => {
     expect(snapPoint({ x: 31, y: 47 }, 20)).toEqual({ x: 40, y: 40 });
+  });
+
+  it("uses a rotated node footprint for portrait display previews", () => {
+    const node = displaysToCanvasNodes([
+      display({
+        id: "portrait",
+        stableId: "macos-cg-portrait",
+        bounds: { x: 0, y: 0, width: 2560, height: 1440 },
+        rotation: 90,
+      }),
+    ])[0];
+
+    expect(node.height).toBeGreaterThan(node.width);
+  });
+
+  it("does not double-rotate bounds already reported as portrait", () => {
+    const dimensions = displayNodeDimensions(
+      display({
+        bounds: { x: 0, y: 0, width: 1440, height: 2560 },
+        rotation: 90,
+      }),
+    );
+
+    expect(dimensions.height).toBeGreaterThan(dimensions.width);
   });
 
   it("resolves legacy macOS mode ids to current full scale option ids", () => {

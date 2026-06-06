@@ -29,7 +29,7 @@
 
 @layer components {
   .monitor-node {
-    @apply grid overflow-hidden rounded border border-zinc-500 bg-white text-zinc-900 shadow-sm dark:border-zinc-500 dark:bg-zinc-900 dark:text-zinc-100;
+    @apply grid overflow-hidden rounded border border-zinc-500 bg-white text-zinc-900 shadow-sm transition-[width,height] duration-150 dark:border-zinc-500 dark:bg-zinc-900 dark:text-zinc-100;
     grid-template-rows: auto 1fr;
   }
 
@@ -51,6 +51,11 @@
 
   .monitor-node-body {
     @apply grid place-items-center content-center gap-1 px-2 py-2 text-center text-[11px] text-zinc-700 dark:text-zinc-300;
+  }
+
+  .monitor-node-icon {
+    @apply inline-flex items-center justify-center transition-transform duration-150;
+    transform: rotate(var(--monitor-rotation, 0deg));
   }
 
   .monitor-node-body small {

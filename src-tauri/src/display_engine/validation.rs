@@ -112,6 +112,27 @@ pub fn scale_changed(
         || refresh_changed
 }
 
+pub fn reconcile_layout_with_display_capabilities(
+    layout: &Layout,
+    active_displays: &[Display],
+) -> Layout {
+    let mut reconciled = layout.clone();
+
+    for layout_display in &mut reconciled.displays {
+        let Some(active_display) = active_displays.iter().find(|display| {
+            display.stable_id.as_deref().unwrap_or(display.id.as_str()) == layout_display.stable_id
+        }) else {
+            continue;
+        };
+
+        if !active_display.capabilities.rotation.supported {
+            layout_display.rotation = active_display.rotation;
+        }
+    }
+
+    reconciled
+}
+
 pub fn mode_ids_compatible(requested_mode_id: &str, active_mode_id: &str) -> bool {
     requested_mode_id == active_mode_id
         || (is_legacy_macos_mode_id(requested_mode_id)
@@ -160,7 +181,10 @@ mod tests {
         DisplayScaleOption, Layout, LayoutDisplay, Point, Rect, Size,
     };
 
-    use super::{normalize_primary_to_origin, scale_changed, validate_layout_for_displays};
+    use super::{
+        normalize_primary_to_origin, reconcile_layout_with_display_capabilities, scale_changed,
+        validate_layout_for_displays,
+    };
 
     fn display(id: &str) -> Display {
         Display {
@@ -263,6 +287,23 @@ mod tests {
         let result = validate_layout_for_displays(&layout, &[active]);
 
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn reconciles_unsupported_rotation_to_current_display_value() {
+        let mut active = display("a");
+        active.capabilities.rotation = DisplayCapability::unsupported("read-only");
+        active.rotation = DisplayRotation::Deg0;
+        let mut requested = layout_display("a", 0, 0);
+        requested.rotation = DisplayRotation::Deg90;
+        let layout = Layout {
+            displays: vec![requested],
+            primary_display_stable_id: Some("a".to_string()),
+        };
+
+        let reconciled = reconcile_layout_with_display_capabilities(&layout, &[active]);
+
+        assert_eq!(reconciled.displays[0].rotation, DisplayRotation::Deg0);
     }
 
     #[test]

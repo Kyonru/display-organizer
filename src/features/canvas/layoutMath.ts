@@ -14,6 +14,25 @@ export type CanvasNodeModel = {
 
 type ScaleOption = Display["scaleOptions"][number];
 
+function isSidewaysRotation(rotation: Display["rotation"]): boolean {
+  return rotation === 90 || rotation === 270;
+}
+
+export function displayNodeDimensions(display: Display) {
+  const longSide = Math.max(display.bounds.width, display.bounds.height) * CANVAS_SCALE;
+  const shortSide = Math.min(display.bounds.width, display.bounds.height) * CANVAS_SCALE;
+
+  return isSidewaysRotation(display.rotation)
+    ? {
+        width: Math.max(NODE_MIN_WIDTH, shortSide),
+        height: Math.max(NODE_MIN_HEIGHT, longSide),
+      }
+    : {
+        width: Math.max(NODE_MIN_WIDTH, longSide),
+        height: Math.max(NODE_MIN_HEIGHT, shortSide),
+      };
+}
+
 export function displayToLayoutDisplay(display: Display): LayoutDisplay {
   return {
     stableId: display.stableId ?? display.id,
@@ -107,8 +126,7 @@ export function displaysToCanvasNodes(displays: Display[]): CanvasNodeModel[] {
   const minY = Math.min(0, ...displays.map((display) => display.position.y));
 
   return displays.map((display) => {
-    const width = Math.max(NODE_MIN_WIDTH, display.bounds.width * CANVAS_SCALE);
-    const height = Math.max(NODE_MIN_HEIGHT, display.bounds.height * CANVAS_SCALE);
+    const { width, height } = displayNodeDimensions(display);
 
     return {
       id: display.stableId ?? display.id,

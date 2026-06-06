@@ -1,4 +1,6 @@
-use serde::{Deserialize, Serialize};
+use serde::de::{self, Visitor};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use std::fmt;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -66,15 +68,11 @@ pub struct DisplayScaleOption {
     pub is_current: bool,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum DisplayRotation {
-    #[serde(rename = "0")]
     Deg0,
-    #[serde(rename = "90")]
     Deg90,
-    #[serde(rename = "180")]
     Deg180,
-    #[serde(rename = "270")]
     Deg270,
 }
 
@@ -86,6 +84,91 @@ impl DisplayRotation {
             270 => Self::Deg270,
             _ => Self::Deg0,
         }
+    }
+
+    pub fn degrees(self) -> u16 {
+        match self {
+            Self::Deg0 => 0,
+            Self::Deg90 => 90,
+            Self::Deg180 => 180,
+            Self::Deg270 => 270,
+        }
+    }
+
+    fn from_degrees_strict(value: i64) -> Option<Self> {
+        match value {
+            0 => Some(Self::Deg0),
+            90 => Some(Self::Deg90),
+            180 => Some(Self::Deg180),
+            270 => Some(Self::Deg270),
+            _ => None,
+        }
+    }
+}
+
+impl Serialize for DisplayRotation {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_u16(self.degrees())
+    }
+}
+
+impl<'de> Deserialize<'de> for DisplayRotation {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        deserializer.deserialize_any(DisplayRotationVisitor)
+    }
+}
+
+struct DisplayRotationVisitor;
+
+impl Visitor<'_> for DisplayRotationVisitor {
+    type Value = DisplayRotation;
+
+    fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("a display rotation of 0, 90, 180, or 270 degrees")
+    }
+
+    fn visit_i64<E>(self, value: i64) -> Result<Self::Value, E>
+    where
+        E: de::Error,
+    {
+        DisplayRotation::from_degrees_strict(value)
+            .ok_or_else(|| E::custom(format!("unsupported display rotation {value}")))
+    }
+
+    fn visit_u64<E>(self, value: u64) -> Result<Self::Value, E>
+    where
+        E: de::Error,
+    {
+        let value = i64::try_from(value)
+            .map_err(|_| E::custom(format!("unsupported display rotation {value}")))?;
+        self.visit_i64(value)
+    }
+
+    fn visit_f64<E>(self, value: f64) -> Result<Self::Value, E>
+    where
+        E: de::Error,
+    {
+        if value.fract() != 0.0 {
+            return Err(E::custom(format!("unsupported display rotation {value}")));
+        }
+
+        self.visit_i64(value as i64)
+    }
+
+    fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
+    where
+        E: de::Error,
+    {
+        let parsed = value
+            .parse::<i64>()
+            .map_err(|_| E::custom(format!("unsupported display rotation {value}")))?;
+        self.visit_i64(parsed)
     }
 }
 
@@ -256,5 +339,31 @@ impl From<&[Display]> for Layout {
                         .map(|display| display.id.clone())
                 }),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::DisplayRotation;
+
+    #[test]
+    fn display_rotation_accepts_numeric_json() {
+        let rotation = serde_json::from_str::<DisplayRotation>("90").unwrap();
+
+        assert_eq!(rotation, DisplayRotation::Deg90);
+    }
+
+    #[test]
+    fn display_rotation_accepts_legacy_string_json() {
+        let rotation = serde_json::from_str::<DisplayRotation>("\"270\"").unwrap();
+
+        assert_eq!(rotation, DisplayRotation::Deg270);
+    }
+
+    #[test]
+    fn display_rotation_serializes_as_number() {
+        let value = serde_json::to_string(&DisplayRotation::Deg180).unwrap();
+
+        assert_eq!(value, "180");
     }
 }

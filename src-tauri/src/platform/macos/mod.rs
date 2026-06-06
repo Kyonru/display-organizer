@@ -1,6 +1,9 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::env;
 use std::ffi::c_void;
+use std::path::PathBuf;
+use std::process::Command;
 
 use crate::display_engine::models::{
     AppliedDisplayChanges, ApplyDisplayChangeResult, ApplyDisplayChangeStatus, Display,
@@ -25,6 +28,8 @@ type CFIndex = isize;
 const MAX_DISPLAYS: usize = 32;
 const CG_ERROR_SUCCESS: CGError = 0;
 const K_CG_CONFIGURE_PERMANENTLY: u32 = 1;
+const DISPLAYPLACER_HINT: &str =
+    "Install displayplacer with Homebrew to enable experimental macOS rotation changes";
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
@@ -72,6 +77,7 @@ extern "C" {
     fn CGDisplayModeGetPixelHeight(mode: CGDisplayModeRef) -> usize;
     fn CGDisplayModeGetRefreshRate(mode: CGDisplayModeRef) -> f64;
     fn CGDisplayModeGetIODisplayModeID(mode: CGDisplayModeRef) -> i32;
+    fn CGDisplayModeIsUsableForDesktopGUI(mode: CGDisplayModeRef) -> bool;
     fn CGBeginDisplayConfiguration(config: *mut CGDisplayConfigRef) -> CGError;
     fn CGConfigureDisplayOrigin(
         config: CGDisplayConfigRef,
@@ -116,16 +122,17 @@ pub fn query_displays() -> Result<Vec<Display>, AppError> {
         )));
     }
 
+    let supports_displayplacer_rotation = displayplacer_path().is_some();
     let displays = ids
         .iter()
         .take(count as usize)
-        .map(|id| display_from_id(*id))
+        .map(|id| display_from_id(*id, supports_displayplacer_rotation))
         .collect::<Vec<_>>();
 
     Ok(displays)
 }
 
-fn display_from_id(id: CGDirectDisplayID) -> Display {
+fn display_from_id(id: CGDirectDisplayID, supports_displayplacer_rotation: bool) -> Display {
     let bounds = unsafe { CGDisplayBounds(id) };
     let pixel_width = unsafe { CGDisplayPixelsWide(id) } as u32;
     let pixel_height = unsafe { CGDisplayPixelsHigh(id) } as u32;
@@ -187,9 +194,11 @@ fn display_from_id(id: CGDirectDisplayID) -> Display {
         capabilities: DisplayCapabilities {
             position: DisplayCapability::supported(),
             primary: DisplayCapability::supported(),
-            rotation: DisplayCapability::unsupported(
-                "Rotation changes are read-only on macOS Alpha",
-            ),
+            rotation: if supports_displayplacer_rotation {
+                DisplayCapability::supported()
+            } else {
+                DisplayCapability::unsupported(DISPLAYPLACER_HINT)
+            },
             scale: scale_capability,
         },
         scale_options,
@@ -220,6 +229,29 @@ pub fn apply_layout(
             )
         })
         .collect::<HashMap<_, _>>();
+
+    let mut rotation_results = HashMap::new();
+    for layout_display in layout.displays.iter().filter(|display| display.enabled) {
+        let display_id = display_ids.get(&layout_display.stable_id).ok_or_else(|| {
+            AppError::Validation(format!(
+                "unable to map layout display {} to an active macOS display",
+                layout_display.stable_id
+            ))
+        })?;
+        let active_display = active_by_stable_id
+            .get(&layout_display.stable_id)
+            .ok_or_else(|| {
+                AppError::Validation(format!(
+                    "unable to map layout display {} to an active macOS display",
+                    layout_display.stable_id
+                ))
+            })?;
+
+        if layout_display.rotation != active_display.rotation {
+            configure_display_rotation(*display_id, layout_display)?;
+            rotation_results.insert(layout_display.stable_id.clone(), true);
+        }
+    }
 
     let mut config: CGDisplayConfigRef = std::ptr::null_mut();
     let begin_error = unsafe { CGBeginDisplayConfiguration(&mut config) };
@@ -274,7 +306,10 @@ pub fn apply_layout(
                     primary: layout.primary_display_stable_id.as_deref()
                         == Some(layout_display.stable_id.as_str())
                         && !active_display.is_primary,
-                    rotation: false,
+                    rotation: rotation_results
+                        .get(&layout_display.stable_id)
+                        .copied()
+                        .unwrap_or(false),
                     scale: scale_applied,
                 },
             });
@@ -298,6 +333,74 @@ pub fn apply_layout(
     }
 
     Ok(display_results)
+}
+
+fn configure_display_rotation(
+    display: CGDirectDisplayID,
+    layout_display: &LayoutDisplay,
+) -> Result<(), AppError> {
+    let path =
+        displayplacer_path().ok_or_else(|| AppError::Display(DISPLAYPLACER_HINT.to_string()))?;
+    let argument = format!("id:{display} degree:{}", layout_display.rotation.degrees());
+    let output = Command::new(&path)
+        .arg(argument)
+        .output()
+        .map_err(|error| {
+            AppError::Display(format!(
+                "failed to run displayplacer at {}: {error}",
+                path.display()
+            ))
+        })?;
+
+    if output.status.success() {
+        return Ok(());
+    }
+
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let detail = if !stderr.is_empty() {
+        stderr
+    } else if !stdout.is_empty() {
+        stdout
+    } else {
+        format!("exit status {}", output.status)
+    };
+
+    if is_displayplacer_rotation_only_resolution_error(&detail) {
+        return Ok(());
+    }
+
+    Err(AppError::Display(format!(
+        "displayplacer failed to rotate {}: {detail}",
+        layout_display.stable_id
+    )))
+}
+
+fn is_displayplacer_rotation_only_resolution_error(detail: &str) -> bool {
+    detail.contains("could not find res:0x0") && detail.contains("scaling:off")
+}
+
+fn displayplacer_path() -> Option<PathBuf> {
+    env::var_os("DISPLAYPLACER_PATH")
+        .map(PathBuf::from)
+        .filter(|path| path.is_file())
+        .or_else(|| {
+            [
+                "/opt/homebrew/bin/displayplacer",
+                "/usr/local/bin/displayplacer",
+                "/usr/bin/displayplacer",
+            ]
+            .iter()
+            .map(PathBuf::from)
+            .find(|path| path.is_file())
+        })
+        .or_else(|| {
+            env::var_os("PATH").and_then(|paths| {
+                env::split_paths(&paths)
+                    .map(|path| path.join("displayplacer"))
+                    .find(|path| path.is_file())
+            })
+        })
 }
 
 fn display_scale_options(display: CGDirectDisplayID) -> (Option<String>, Vec<DisplayScaleOption>) {
@@ -324,20 +427,21 @@ fn display_scale_options(display: CGDirectDisplayID) -> (Option<String>, Vec<Dis
         if mode.is_null() {
             continue;
         }
+        if !unsafe { CGDisplayModeIsUsableForDesktopGUI(mode) } {
+            continue;
+        }
 
         let mode_id = mode_identifier(mode);
         if !seen.insert(mode_id.clone()) {
             continue;
         }
 
-        let logical_width = unsafe { CGDisplayModeGetWidth(mode) }.max(1) as u32;
-        let logical_height = unsafe { CGDisplayModeGetHeight(mode) }.max(1) as u32;
-        let pixel_width = unsafe { CGDisplayModeGetPixelWidth(mode) }.max(1) as f64;
+        let signature = mode_signature(mode);
         let refresh_rate = optional_refresh_rate(unsafe { CGDisplayModeGetRefreshRate(mode) });
-        let scale_factor = (pixel_width / logical_width as f64).max(1.0);
+        let scale_factor = mode_scale_factor(&signature);
         let is_current = current_signature
             .as_ref()
-            .map(|signature| signature == &mode_signature(mode))
+            .map(|current| current == &signature)
             .unwrap_or(false);
 
         if is_current {
@@ -346,19 +450,11 @@ fn display_scale_options(display: CGDirectDisplayID) -> (Option<String>, Vec<Dis
 
         options.push(DisplayScaleOption {
             id: mode_id,
-            label: format!(
-                "{} x {} ({:.2}x{})",
-                logical_width,
-                logical_height,
-                scale_factor,
-                refresh_rate
-                    .map(|rate| format!(", {:.0} Hz", rate))
-                    .unwrap_or_default()
-            ),
+            label: mode_label(&signature, scale_factor, refresh_rate),
             scale_factor,
             resolution: Size {
-                width: logical_width,
-                height: logical_height,
+                width: signature.logical_width.max(1) as u32,
+                height: signature.logical_height.max(1) as u32,
             },
             refresh_rate,
             is_current,
@@ -400,6 +496,9 @@ fn configure_display_mode(
     for index in 0..count {
         let mode = unsafe { CFArrayGetValueAtIndex(modes, index as CFIndex) } as CGDisplayModeRef;
         if mode.is_null() {
+            continue;
+        }
+        if !unsafe { CGDisplayModeIsUsableForDesktopGUI(mode) } {
             continue;
         }
 
@@ -475,8 +574,7 @@ fn mode_match_score(mode: CGDisplayModeRef, layout_display: &LayoutDisplay) -> f
     let signature = mode_signature(mode);
     let logical_width = signature.logical_width.max(1) as f64;
     let logical_height = signature.logical_height.max(1) as f64;
-    let pixel_width = signature.pixel_width.max(1) as f64;
-    let mode_scale = (pixel_width / logical_width).max(1.0);
+    let mode_scale = mode_scale_factor(&signature);
     let requested_width = layout_display.resolution.width.max(1) as f64;
     let requested_height = layout_display.resolution.height.max(1) as f64;
     let width_delta = (logical_width - requested_width).abs() / logical_width.max(requested_width);
@@ -496,6 +594,35 @@ fn mode_match_score(mode: CGDisplayModeRef, layout_display: &LayoutDisplay) -> f
         .unwrap_or(0.0);
 
     width_delta * 10.0 + height_delta * 10.0 + scale_delta + refresh_delta
+}
+
+fn mode_scale_factor(signature: &ModeSignature) -> f64 {
+    let width_scale = signature.pixel_width.max(1) as f64 / signature.logical_width.max(1) as f64;
+    let height_scale =
+        signature.pixel_height.max(1) as f64 / signature.logical_height.max(1) as f64;
+
+    ((width_scale + height_scale) / 2.0).max(1.0)
+}
+
+fn mode_label(signature: &ModeSignature, scale_factor: f64, refresh_rate: Option<f64>) -> String {
+    let backing_store = if signature.pixel_width != signature.logical_width
+        || signature.pixel_height != signature.logical_height
+    {
+        format!(
+            " @ {} x {} px",
+            signature.pixel_width, signature.pixel_height
+        )
+    } else {
+        String::new()
+    };
+    let refresh = refresh_rate
+        .map(|rate| format!(", {:.0} Hz", rate))
+        .unwrap_or_default();
+
+    format!(
+        "{} x {}{} ({:.2}x{})",
+        signature.logical_width, signature.logical_height, backing_store, scale_factor, refresh
+    )
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -561,5 +688,49 @@ fn release_if_present(value: CFTypeRef) {
         unsafe {
             CFRelease(value);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        is_displayplacer_rotation_only_resolution_error, mode_label, mode_scale_factor,
+        ModeSignature,
+    };
+
+    #[test]
+    fn computes_scaled_mode_from_logical_and_pixel_sizes() {
+        let signature = ModeSignature {
+            logical_width: 2560,
+            logical_height: 1440,
+            pixel_width: 5120,
+            pixel_height: 2880,
+            refresh_millihertz: 60000,
+        };
+
+        assert_eq!(mode_scale_factor(&signature), 2.0);
+    }
+
+    #[test]
+    fn labels_scaled_modes_with_backing_pixel_size() {
+        let signature = ModeSignature {
+            logical_width: 2560,
+            logical_height: 1440,
+            pixel_width: 5120,
+            pixel_height: 2880,
+            refresh_millihertz: 60000,
+        };
+
+        assert_eq!(
+            mode_label(&signature, 2.0, Some(60.0)),
+            "2560 x 1440 @ 5120 x 2880 px (2.00x, 60 Hz)"
+        );
+    }
+
+    #[test]
+    fn treats_displayplacer_rotation_only_resolution_error_as_non_fatal() {
+        assert!(is_displayplacer_rotation_only_resolution_error(
+            "Screen ID 2: could not find res:0x0 scaling:off"
+        ));
     }
 }

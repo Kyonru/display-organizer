@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import {
   Background,
   Controls,
@@ -18,6 +18,7 @@ import {
   NODE_MIN_HEIGHT,
   NODE_MIN_WIDTH,
   canvasPositionsToLayout,
+  displayNodeDimensions,
   displaysToCanvasNodes,
   displaysToLayout,
   resolveScaleOptionForLayoutDisplay,
@@ -49,27 +50,27 @@ const primaryButton =
 const fieldInput =
   "h-8 w-full rounded border border-zinc-200 bg-white px-2 text-xs text-zinc-900 outline-none transition focus:border-emerald-500 disabled:cursor-not-allowed disabled:opacity-55 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-100";
 
-function monitorNodeDimensions(display: Display) {
-  return {
-    width: Math.max(NODE_MIN_WIDTH, display.bounds.width * CANVAS_SCALE),
-    height: Math.max(NODE_MIN_HEIGHT, display.bounds.height * CANVAS_SCALE),
-  };
-}
-
 function MonitorNode({ data, selected }: NodeProps<Node<MonitorNodeData>>) {
   const display = data.display;
+  const nodeStyle = {
+    width: data.width,
+    height: data.height,
+    "--monitor-rotation": `${display.rotation}deg`,
+  } as CSSProperties;
 
   return (
     <div
       className={clsx("monitor-node", selected && "monitor-node-selected")}
-      style={{ width: data.width, height: data.height }}
+      style={nodeStyle}
     >
       <div className="monitor-node-header">
         <span>{display.name}</span>
         {display.isPrimary ? <strong>Primary</strong> : null}
       </div>
       <div className="monitor-node-body">
-        <Monitor size={22} />
+        <span className="monitor-node-icon">
+          <Monitor size={22} />
+        </span>
         <span>
           {display.resolution.width} x {display.resolution.height}
         </span>
@@ -178,7 +179,9 @@ export function App() {
               resolution: resolvedScaleOption?.resolution ?? layoutDisplay.resolution,
               refreshRate: resolvedScaleOption?.refreshRate ?? layoutDisplay.refreshRate,
               scaleFactor: resolvedScaleOption?.scaleFactor ?? layoutDisplay.scaleFactor,
-              rotation: layoutDisplay.rotation,
+              rotation: display.capabilities.rotation.supported
+                ? layoutDisplay.rotation
+                : display.rotation,
               modeId: resolvedScaleOption?.id ?? layoutDisplay.modeId ?? display.modeId,
               isPrimary,
               bounds: {
@@ -260,7 +263,7 @@ export function App() {
             ...node,
             data: {
               ...node.data,
-              ...monitorNodeDimensions(display),
+              ...displayNodeDimensions(display),
               display,
             },
           };
@@ -321,9 +324,36 @@ export function App() {
 
   const handleRotationChange = useCallback(
     (displayId: string, rotation: DisplayRotation) => {
-      updateDisplayDraft(displayId, (display) => ({ ...display, rotation }));
+      setNodes((currentNodes) =>
+        currentNodes.map((node) => {
+          if (node.id !== displayId) {
+            return node;
+          }
+
+          const previousDimensions = {
+            width: node.data.width,
+            height: node.data.height,
+          };
+          const display = { ...node.data.display, rotation };
+          const nextDimensions = displayNodeDimensions(display);
+
+          return {
+            ...node,
+            position: {
+              x: node.position.x + (previousDimensions.width - nextDimensions.width) / 2,
+              y: node.position.y + (previousDimensions.height - nextDimensions.height) / 2,
+            },
+            data: {
+              ...node.data,
+              ...nextDimensions,
+              display,
+            },
+          };
+        }),
+      );
+      setDirty(true);
     },
-    [updateDisplayDraft],
+    [setDirty, setNodes],
   );
 
   const handleNodesChange = useCallback(
@@ -448,6 +478,12 @@ export function App() {
     selectedDisplay?.modeId ??
     selectedDisplay?.scaleOptions.find((option) => option.isCurrent)?.id ??
     "";
+  const selectedRotationReason = selectedDisplay?.capabilities.rotation.reason ?? "";
+  const rotationLabel = selectedDisplay?.capabilities.rotation.supported
+    ? "Rotation"
+    : selectedRotationReason.toLowerCase().includes("displayplacer")
+      ? "Rotation (requires displayplacer)"
+      : "Rotation (read-only)";
 
   return (
     <main className="grid h-screen grid-rows-[48px_minmax(0,1fr)] overflow-hidden bg-zinc-100 text-zinc-950 dark:bg-zinc-950 dark:text-zinc-100">
@@ -707,7 +743,7 @@ export function App() {
               ) : null}
 
               <label className="block space-y-1 text-xs">
-                <span className="font-medium text-zinc-700 dark:text-zinc-200">Rotation</span>
+                <span className="font-medium text-zinc-700 dark:text-zinc-200">{rotationLabel}</span>
                 <select
                   className={fieldInput}
                   value={selectedDisplay.rotation}
