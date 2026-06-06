@@ -1,0 +1,303 @@
+import { useEffect, useMemo, useState } from "react";
+import {
+  Background,
+  Controls,
+  MiniMap,
+  ReactFlow,
+  type Node,
+  type NodeProps,
+  useEdgesState,
+  useNodesState,
+} from "@xyflow/react";
+import { Copy, Monitor, RefreshCcw, Save, Trash2, Zap } from "lucide-react";
+import { clsx } from "clsx";
+import { useCanvasStore } from "../features/canvas/canvasStore";
+import {
+  canvasPositionsToLayout,
+  displaysToCanvasNodes,
+  displaysToLayout,
+  snapPoint,
+} from "../features/canvas/layoutMath";
+import { useDisplayStore } from "../features/displays/displayStore";
+import { useProfileStore } from "../features/profiles/profileStore";
+import type { Display } from "../shared/types";
+
+type MonitorNodeData = {
+  display: Display;
+  width: number;
+  height: number;
+};
+
+function MonitorNode({ data, selected }: NodeProps<Node<MonitorNodeData>>) {
+  const display = data.display;
+
+  return (
+    <div
+      className={clsx("monitor-node", selected && "monitor-node-selected")}
+      style={{ width: data.width, height: data.height }}
+    >
+      <div className="monitor-node-header">
+        <span>{display.name}</span>
+        {display.isPrimary ? <strong>Primary</strong> : null}
+      </div>
+      <div className="monitor-node-body">
+        <Monitor size={22} />
+        <span>
+          {display.resolution.width} x {display.resolution.height}
+        </span>
+        <small>
+          {display.scaleFactor.toFixed(2)}x scale · {display.rotation}°
+        </small>
+      </div>
+    </div>
+  );
+}
+
+const nodeTypes = {
+  monitor: MonitorNode,
+};
+
+export function App() {
+  const { displays, isRefreshing, error: displayError, refreshDisplays } = useDisplayStore();
+  const {
+    profiles,
+    isApplying,
+    error: profileError,
+    lastApplyResult,
+    loadProfiles,
+    saveProfile,
+    renameProfile,
+    duplicateProfile,
+    deleteProfile,
+    applyLayout,
+    applyProfile,
+  } = useProfileStore();
+  const { gridSize, snapToGrid, setDirty, isDirty, setSelectedDisplayIds } = useCanvasStore();
+  const [nodes, setNodes, onNodesChange] = useNodesState<Node<MonitorNodeData>>([]);
+  const [edges, , onEdgesChange] = useEdgesState([]);
+  const [selectedDisplayId, setSelectedDisplayId] = useState<string | null>(null);
+
+  useEffect(() => {
+    void refreshDisplays();
+    void loadProfiles();
+  }, [loadProfiles, refreshDisplays]);
+
+  useEffect(() => {
+    const canvasNodes = displaysToCanvasNodes(displays).map<Node<MonitorNodeData>>((node) => ({
+      id: node.id,
+      type: "monitor",
+      position: node.position,
+      data: {
+        display: node.display,
+        width: node.width,
+        height: node.height,
+      },
+    }));
+    setNodes(canvasNodes);
+    setDirty(false);
+  }, [displays, setDirty, setNodes]);
+
+  const selectedDisplay = useMemo(
+    () => displays.find((display) => (display.stableId ?? display.id) === selectedDisplayId) ?? displays[0],
+    [displays, selectedDisplayId],
+  );
+
+  const currentLayout = () => {
+    const positions = Object.fromEntries(
+      nodes.map((node) => [
+        node.id,
+        snapToGrid ? snapPoint(node.position, gridSize) : node.position,
+      ]),
+    );
+    return nodes.length > 0 ? canvasPositionsToLayout(displays, positions) : displaysToLayout(displays);
+  };
+
+  const handleSaveProfile = async () => {
+    const name = window.prompt("Profile name", "Work Desk");
+    if (!name?.trim()) {
+      return;
+    }
+
+    await saveProfile({
+      name: name.trim(),
+      description: null,
+      layout: currentLayout(),
+    });
+  };
+
+  const handleApplyLayout = async () => {
+    if (displays.length === 0) {
+      return;
+    }
+
+    const confirmed = window.confirm(
+      "Apply this monitor arrangement to macOS? Your current layout will be saved as a recovery snapshot.",
+    );
+    if (!confirmed) {
+      return;
+    }
+
+    const result = await applyLayout(currentLayout());
+    if (result?.applied) {
+      setDirty(false);
+      await refreshDisplays();
+    }
+  };
+
+  return (
+    <main className="app-shell">
+      <header className="top-bar">
+        <div>
+          <h1>Display Layout Manager</h1>
+          <p>{displays.length} display{displays.length === 1 ? "" : "s"} connected</p>
+        </div>
+        <div className="toolbar">
+          <button type="button" onClick={() => void refreshDisplays()} disabled={isRefreshing}>
+            <RefreshCcw size={16} />
+            Refresh
+          </button>
+          <button type="button" onClick={() => void handleSaveProfile()} disabled={displays.length === 0}>
+            <Save size={16} />
+            Save Profile
+          </button>
+          <button
+            type="button"
+            className="primary-action"
+            onClick={() => void handleApplyLayout()}
+            disabled={displays.length === 0 || isApplying}
+          >
+            <Zap size={16} />
+            Apply Layout
+          </button>
+        </div>
+      </header>
+
+      <section className="workspace">
+        <aside className="profile-sidebar">
+          <div className="panel-heading">
+            <h2>Profiles</h2>
+            <span>{profiles.length}</span>
+          </div>
+          <div className="profile-list">
+            {profiles.length === 0 ? (
+              <p className="empty-state">Save the current arrangement to create your first profile.</p>
+            ) : null}
+            {profiles.map((profile) => (
+              <article key={profile.id} className="profile-row">
+                <button
+                  type="button"
+                  className="profile-main"
+                  onClick={() => {
+                    const confirmed = window.confirm(`Apply "${profile.name}" to macOS?`);
+                    if (confirmed) {
+                      void applyProfile(profile.id).then((result) => {
+                        if (result?.applied) {
+                          void refreshDisplays();
+                        }
+                      });
+                    }
+                  }}
+                >
+                  <strong>{profile.name}</strong>
+                  <span>{profile.layout.displays.length} displays</span>
+                </button>
+                <div className="profile-actions">
+                  <button
+                    type="button"
+                    aria-label={`Rename ${profile.name}`}
+                    onClick={() => {
+                      const name = window.prompt("Profile name", profile.name);
+                      if (name?.trim()) {
+                        void renameProfile(profile.id, name.trim());
+                      }
+                    }}
+                  >
+                    <Save size={14} />
+                  </button>
+                  <button
+                    type="button"
+                    aria-label={`Duplicate ${profile.name}`}
+                    onClick={() => void duplicateProfile(profile.id)}
+                  >
+                    <Copy size={14} />
+                  </button>
+                  <button
+                    type="button"
+                    aria-label={`Delete ${profile.name}`}
+                    onClick={() => {
+                      if (window.confirm(`Delete "${profile.name}"?`)) {
+                        void deleteProfile(profile.id);
+                      }
+                    }}
+                  >
+                    <Trash2 size={14} />
+                  </button>
+                </div>
+              </article>
+            ))}
+          </div>
+        </aside>
+
+        <section className="canvas-panel">
+          <ReactFlow
+            nodes={nodes}
+            edges={edges}
+            nodeTypes={nodeTypes}
+            onNodesChange={(changes) => {
+              onNodesChange(changes);
+              if (changes.some((change) => change.type === "position")) {
+                setDirty(true);
+              }
+            }}
+            onEdgesChange={onEdgesChange}
+            onSelectionChange={({ nodes: selectedNodes }) => {
+              const ids = selectedNodes.map((node) => node.id);
+              setSelectedDisplayIds(ids);
+              setSelectedDisplayId(ids[0] ?? null);
+            }}
+            snapToGrid={snapToGrid}
+            snapGrid={[gridSize, gridSize]}
+            minZoom={0.25}
+            maxZoom={2}
+            fitView
+          >
+            <Background gap={gridSize} />
+            <MiniMap pannable zoomable />
+            <Controls />
+          </ReactFlow>
+        </section>
+
+        <aside className="inspector">
+          <div className="panel-heading">
+            <h2>Display</h2>
+            {isDirty ? <span className="dirty-badge">Unsaved</span> : null}
+          </div>
+          {selectedDisplay ? (
+            <dl>
+              <dt>Name</dt>
+              <dd>{selectedDisplay.name}</dd>
+              <dt>Resolution</dt>
+              <dd>
+                {selectedDisplay.resolution.width} x {selectedDisplay.resolution.height}
+              </dd>
+              <dt>Position</dt>
+              <dd>
+                {selectedDisplay.position.x}, {selectedDisplay.position.y}
+              </dd>
+              <dt>Scale</dt>
+              <dd>{selectedDisplay.scaleFactor.toFixed(2)}x</dd>
+              <dt>Rotation</dt>
+              <dd>{selectedDisplay.rotation}°</dd>
+              <dt>Identifier</dt>
+              <dd>{selectedDisplay.stableId ?? selectedDisplay.id}</dd>
+            </dl>
+          ) : (
+            <p className="empty-state">No display selected.</p>
+          )}
+          {displayError || profileError ? <p className="error-text">{displayError ?? profileError}</p> : null}
+          {lastApplyResult ? <p className="success-text">{lastApplyResult.message}</p> : null}
+        </aside>
+      </section>
+    </main>
+  );
+}
