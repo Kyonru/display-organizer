@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Background,
   Controls,
@@ -102,7 +102,9 @@ export function App() {
     [displays, selectedDisplayId],
   );
 
-  const currentLayout = () => {
+  const snapGrid = useMemo<[number, number]>(() => [gridSize, gridSize], [gridSize]);
+
+  const currentLayout = useCallback(() => {
     const positions = Object.fromEntries(
       nodes.map((node) => [
         node.id,
@@ -110,7 +112,29 @@ export function App() {
       ]),
     );
     return nodes.length > 0 ? canvasPositionsToLayout(displays, positions) : displaysToLayout(displays);
-  };
+  }, [displays, gridSize, nodes, snapToGrid]);
+
+  const handleNodesChange = useCallback(
+    (changes: Parameters<typeof onNodesChange>[0]) => {
+      onNodesChange(changes);
+      if (changes.some((change) => change.type === "position")) {
+        setDirty(true);
+      }
+    },
+    [onNodesChange, setDirty],
+  );
+
+  const handleSelectionChange = useCallback(
+    ({ nodes: selectedNodes }: { nodes: Node<MonitorNodeData>[] }) => {
+      const ids = selectedNodes.map((node) => node.id);
+      setSelectedDisplayIds(ids);
+      setSelectedDisplayId((currentId) => {
+        const nextId = ids[0] ?? null;
+        return currentId === nextId ? currentId : nextId;
+      });
+    },
+    [setSelectedDisplayIds],
+  );
 
   const handleSaveProfile = async () => {
     const name = window.prompt("Profile name", "Work Desk");
@@ -243,20 +267,11 @@ export function App() {
             nodes={nodes}
             edges={edges}
             nodeTypes={nodeTypes}
-            onNodesChange={(changes) => {
-              onNodesChange(changes);
-              if (changes.some((change) => change.type === "position")) {
-                setDirty(true);
-              }
-            }}
+            onNodesChange={handleNodesChange}
             onEdgesChange={onEdgesChange}
-            onSelectionChange={({ nodes: selectedNodes }) => {
-              const ids = selectedNodes.map((node) => node.id);
-              setSelectedDisplayIds(ids);
-              setSelectedDisplayId(ids[0] ?? null);
-            }}
+            onSelectionChange={handleSelectionChange}
             snapToGrid={snapToGrid}
-            snapGrid={[gridSize, gridSize]}
+            snapGrid={snapGrid}
             minZoom={0.25}
             maxZoom={2}
             fitView

@@ -15,7 +15,14 @@ export const useCanvasStore = create<CanvasState>((set) => ({
   snapToGrid: true,
   gridSize: 20,
   isDirty: false,
-  setSelectedDisplayIds: (selectedDisplayIds) => set({ selectedDisplayIds }),
+  setSelectedDisplayIds: (selectedDisplayIds) =>
+    set((state) => {
+      const isSameSelection =
+        state.selectedDisplayIds.length === selectedDisplayIds.length &&
+        state.selectedDisplayIds.every((id, index) => id === selectedDisplayIds[index]);
+
+      return isSameSelection ? state : { selectedDisplayIds };
+    }),
   setSnapToGrid: (snapToGrid) => set({ snapToGrid }),
   setDirty: (isDirty) => set({ isDirty }),
 }));
