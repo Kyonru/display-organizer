@@ -3,6 +3,7 @@ import {
   Background,
   Controls,
   MiniMap,
+  Panel,
   ReactFlow,
   type Node,
   type NodeProps,
@@ -21,6 +22,7 @@ import {
   displayNodeDimensions,
   displaysToCanvasNodes,
   displaysToLayout,
+  layoutsMatch,
   resolveScaleOptionForLayoutDisplay,
   snapPoint,
 } from "../features/canvas/layoutMath";
@@ -484,6 +486,25 @@ export function App() {
     : selectedRotationReason.toLowerCase().includes("displayplacer")
       ? "Rotation (requires displayplacer)"
       : "Rotation (read-only)";
+  const activeProfile = useMemo(
+    () => profiles.find((profile) => profile.id === activeProfileId) ?? null,
+    [activeProfileId, profiles],
+  );
+  const activeProfileMatchesOs = useMemo(() => {
+    if (!activeProfile || displays.length === 0 || isDirty) {
+      return false;
+    }
+
+    return layoutsMatch(activeProfile.layout, displaysToLayout(displays));
+  }, [activeProfile, displays, isDirty]);
+  const canvasProfileTitle = activeProfile?.name ?? "Current OS layout";
+  const canvasProfileStatus = activeProfile
+    ? activeProfileMatchesOs
+      ? "Actual profile"
+      : isDirty
+        ? "Editing"
+        : "Saved profile"
+    : "Live";
 
   return (
     <main className="grid h-screen grid-rows-[48px_minmax(0,1fr)] overflow-hidden bg-zinc-100 text-zinc-950 dark:bg-zinc-950 dark:text-zinc-100">
@@ -652,6 +673,25 @@ export function App() {
             colorMode={theme}
             fitView
           >
+            <Panel position="top-left" className="!m-3">
+              <div className="flex max-w-[360px] items-center gap-2 rounded border border-zinc-200 bg-white/95 px-2.5 py-1.5 text-xs shadow-sm backdrop-blur dark:border-zinc-800 dark:bg-zinc-900/95">
+                <span className="min-w-0 truncate font-semibold text-zinc-900 dark:text-zinc-100">
+                  {canvasProfileTitle}
+                </span>
+                <span
+                  className={clsx(
+                    "shrink-0 rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase",
+                    activeProfileMatchesOs
+                      ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/60 dark:text-emerald-200"
+                      : isDirty
+                        ? "bg-amber-100 text-amber-700 dark:bg-amber-900/60 dark:text-amber-200"
+                        : "bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300",
+                  )}
+                >
+                  {canvasProfileStatus}
+                </span>
+              </div>
+            </Panel>
             <Background gap={gridSize} color={theme === "dark" ? "#3f3f46" : "#d4d4d8"} />
             <MiniMap
               pannable

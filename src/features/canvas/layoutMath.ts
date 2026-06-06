@@ -121,6 +121,54 @@ export function displaysToLayout(displays: Display[]): Layout {
   };
 }
 
+function valuesWithin(left: number, right: number, tolerance: number): boolean {
+  return Math.abs(left - right) <= tolerance;
+}
+
+function optionalRefreshRatesMatch(left: number | null, right: number | null): boolean {
+  if (left === null || right === null) {
+    return true;
+  }
+
+  return valuesWithin(left, right, 0.5);
+}
+
+function layoutDisplayMatches(left: LayoutDisplay, right: LayoutDisplay): boolean {
+  return (
+    valuesWithin(left.position.x, right.position.x, 1) &&
+    valuesWithin(left.position.y, right.position.y, 1) &&
+    left.resolution.width === right.resolution.width &&
+    left.resolution.height === right.resolution.height &&
+    valuesWithin(left.scaleFactor, right.scaleFactor, 0.02) &&
+    optionalRefreshRatesMatch(left.refreshRate, right.refreshRate) &&
+    left.rotation === right.rotation
+  );
+}
+
+export function layoutsMatch(left: Layout, right: Layout): boolean {
+  const leftDisplays = left.displays.filter((display) => display.enabled);
+  const rightDisplays = right.displays.filter((display) => display.enabled);
+
+  if (leftDisplays.length !== rightDisplays.length) {
+    return false;
+  }
+
+  if (
+    left.primaryDisplayStableId &&
+    right.primaryDisplayStableId &&
+    left.primaryDisplayStableId !== right.primaryDisplayStableId
+  ) {
+    return false;
+  }
+
+  const rightById = new Map(rightDisplays.map((display) => [display.stableId, display]));
+
+  return leftDisplays.every((leftDisplay) => {
+    const rightDisplay = rightById.get(leftDisplay.stableId);
+    return rightDisplay ? layoutDisplayMatches(leftDisplay, rightDisplay) : false;
+  });
+}
+
 export function displaysToCanvasNodes(displays: Display[]): CanvasNodeModel[] {
   const minX = Math.min(0, ...displays.map((display) => display.position.x));
   const minY = Math.min(0, ...displays.map((display) => display.position.y));

@@ -5,6 +5,8 @@ import {
   displayNodeDimensions,
   displaysToCanvasNodes,
   displayToLayoutDisplay,
+  displaysToLayout,
+  layoutsMatch,
   resolveScaleOptionForLayoutDisplay,
   snapPoint,
 } from "./layoutMath";
@@ -136,6 +138,26 @@ describe("layoutMath", () => {
     );
 
     expect(dimensions.height).toBeGreaterThan(dimensions.width);
+  });
+
+  it("matches a saved profile to the current OS layout", () => {
+    const osLayout = displaysToLayout(displays);
+
+    expect(layoutsMatch(osLayout, displaysToLayout(displays))).toBe(true);
+  });
+
+  it("does not match a saved profile with a different display position", () => {
+    const profileLayout = displaysToLayout(displays);
+    const osLayout = {
+      ...profileLayout,
+      displays: profileLayout.displays.map((display) =>
+        display.stableId === "macos-cg-2"
+          ? { ...display, position: { x: display.position.x + 40, y: display.position.y } }
+          : display,
+      ),
+    };
+
+    expect(layoutsMatch(profileLayout, osLayout)).toBe(false);
   });
 
   it("resolves legacy macOS mode ids to current full scale option ids", () => {
