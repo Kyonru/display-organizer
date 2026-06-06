@@ -86,6 +86,27 @@ pub fn save_profile(draft: LayoutProfileDraft) -> Result<LayoutProfile, AppError
     Ok(profile)
 }
 
+pub fn update_profile(id: String, draft: LayoutProfileDraft) -> Result<LayoutProfile, AppError> {
+    let trimmed = draft.name.trim();
+    if trimmed.is_empty() {
+        return Err(AppError::Validation("profile name is required".to_string()));
+    }
+
+    let mut profiles = get_profiles()?;
+    let profile = profiles
+        .iter_mut()
+        .find(|profile| profile.id == id)
+        .ok_or_else(|| AppError::ProfileNotFound(id.clone()))?;
+
+    profile.name = trimmed.to_string();
+    profile.description = draft.description;
+    profile.layout = draft.layout;
+    profile.updated_at = Utc::now().to_rfc3339();
+    let updated = profile.clone();
+    write_profiles(&profiles)?;
+    Ok(updated)
+}
+
 pub fn rename_profile(id: String, name: String) -> Result<LayoutProfile, AppError> {
     let trimmed = name.trim();
     if trimmed.is_empty() {
@@ -172,7 +193,9 @@ mod tests {
         DisplayRotation, Layout, LayoutDisplay, LayoutProfileDraft, Point, Size,
     };
 
-    use super::{delete_profile, duplicate_profile, get_profiles, rename_profile, save_profile};
+    use super::{
+        delete_profile, duplicate_profile, get_profiles, rename_profile, save_profile, update_profile,
+    };
 
     fn draft(name: &str) -> LayoutProfileDraft {
         LayoutProfileDraft {
@@ -201,6 +224,9 @@ mod tests {
         let profile = save_profile(draft("Test Profile")).expect("save profile");
         let renamed = rename_profile(profile.id.clone(), "Renamed".to_string()).expect("rename profile");
         assert_eq!(renamed.name, "Renamed");
+
+        let updated = update_profile(profile.id.clone(), draft("Updated")).expect("update profile");
+        assert_eq!(updated.name, "Updated");
 
         let duplicate = duplicate_profile(profile.id.clone()).expect("duplicate profile");
         assert!(duplicate.name.contains("Copy"));

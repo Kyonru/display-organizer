@@ -7,6 +7,7 @@ import {
   getMockProfiles,
   renameMockProfile,
   saveMockProfile,
+  updateMockProfile,
 } from "../../shared/mockBackend";
 import { isTauriRuntime } from "../../shared/runtime";
 import type { ApplyLayoutResult, Layout, LayoutProfile, LayoutProfileDraft } from "../../shared/types";
@@ -25,6 +26,14 @@ export function saveProfile(draft: LayoutProfileDraft): Promise<LayoutProfile> {
   }
 
   return invoke<LayoutProfile>("save_profile", { draft });
+}
+
+export function updateProfile(id: string, draft: LayoutProfileDraft): Promise<LayoutProfile> {
+  if (!isTauriRuntime()) {
+    return updateMockProfile(id, draft);
+  }
+
+  return invoke<LayoutProfile>("update_profile", { id, draft });
 }
 
 export function renameProfile(id: string, name: string): Promise<LayoutProfile> {

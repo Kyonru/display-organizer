@@ -10,6 +10,7 @@ pub fn run() {
             commands::get_displays,
             commands::get_profiles,
             commands::save_profile,
+            commands::update_profile,
             commands::rename_profile,
             commands::duplicate_profile,
             commands::delete_profile,

@@ -21,6 +21,11 @@ pub fn save_profile(draft: LayoutProfileDraft) -> Result<LayoutProfile, AppError
 }
 
 #[tauri::command]
+pub fn update_profile(id: String, draft: LayoutProfileDraft) -> Result<LayoutProfile, AppError> {
+    profile_repository::update_profile(id, draft)
+}
+
+#[tauri::command]
 pub fn rename_profile(id: String, name: String) -> Result<LayoutProfile, AppError> {
     profile_repository::rename_profile(id, name)
 }

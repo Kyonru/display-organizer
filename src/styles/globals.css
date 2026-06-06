@@ -158,6 +158,12 @@ button:disabled {
   padding: 10px;
 }
 
+.profile-row-active {
+  border-color: #1f7a5b;
+  background: #edf8f3;
+  box-shadow: inset 3px 0 0 #1f7a5b;
+}
+
 .profile-main {
   display: grid;
   gap: 3px;

@@ -89,6 +89,21 @@ export function saveMockProfile(draft: LayoutProfileDraft): Promise<LayoutProfil
   return Promise.resolve(profile);
 }
 
+export function updateMockProfile(profileId: string, draft: LayoutProfileDraft): Promise<LayoutProfile> {
+  const profiles = readProfiles();
+  const profile = profiles.find((item) => item.id === profileId);
+  if (!profile) {
+    return Promise.reject(new Error(`profile not found: ${profileId}`));
+  }
+
+  profile.name = draft.name;
+  profile.description = draft.description ?? null;
+  profile.layout = draft.layout;
+  profile.updatedAt = now();
+  writeProfiles(profiles);
+  return Promise.resolve(profile);
+}
+
 export function renameMockProfile(profileId: string, name: string): Promise<LayoutProfile> {
   const profiles = readProfiles();
   const profile = profiles.find((item) => item.id === profileId);

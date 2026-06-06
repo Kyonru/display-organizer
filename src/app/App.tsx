@@ -9,7 +9,7 @@ import {
   useEdgesState,
   useNodesState,
 } from "@xyflow/react";
-import { Copy, Monitor, RefreshCcw, Save, Trash2, Zap } from "lucide-react";
+import { Copy, Monitor, Plus, RefreshCcw, Save, Trash2, Zap } from "lucide-react";
 import { clsx } from "clsx";
 import { useCanvasStore } from "../features/canvas/canvasStore";
 import {
@@ -63,11 +63,14 @@ export function App() {
   const { displays, isRefreshing, error: displayError, refreshDisplays } = useDisplayStore();
   const {
     profiles,
+    activeProfileId,
     isApplying,
     error: profileError,
     lastApplyResult,
     loadProfiles,
+    selectProfile,
     saveProfile,
+    updateProfile,
     renameProfile,
     duplicateProfile,
     deleteProfile,
@@ -80,25 +83,59 @@ export function App() {
   const [selectedDisplayId, setSelectedDisplayId] = useState<string | null>(null);
   const [profileName, setProfileName] = useState("Work Desk");
 
+  const buildNodesForDisplays = useCallback(
+    (displayList: Display[]) =>
+      displaysToCanvasNodes(displayList).map<Node<MonitorNodeData>>((node) => ({
+        id: node.id,
+        type: "monitor",
+        position: node.position,
+        data: {
+          display: node.display,
+          width: node.width,
+          height: node.height,
+        },
+      })),
+    [],
+  );
+
+  const buildNodesForProfile = useCallback(
+    (profileDisplays: Display[], profileId: string) => {
+      const profile = profiles.find((item) => item.id === profileId);
+      if (!profile) {
+        return buildNodesForDisplays(profileDisplays);
+      }
+
+      const layoutById = new Map(profile.layout.displays.map((display) => [display.stableId, display]));
+      const patchedDisplays = profileDisplays.map((display) => {
+        const stableId = display.stableId ?? display.id;
+        const layoutDisplay = layoutById.get(stableId);
+        return layoutDisplay ? { ...display, position: layoutDisplay.position } : display;
+      });
+
+      return buildNodesForDisplays(patchedDisplays);
+    },
+    [buildNodesForDisplays, profiles],
+  );
+
   useEffect(() => {
     void refreshDisplays();
     void loadProfiles();
   }, [loadProfiles, refreshDisplays]);
 
   useEffect(() => {
-    const canvasNodes = displaysToCanvasNodes(displays).map<Node<MonitorNodeData>>((node) => ({
-      id: node.id,
-      type: "monitor",
-      position: node.position,
-      data: {
-        display: node.display,
-        width: node.width,
-        height: node.height,
-      },
-    }));
+    const canvasNodes = activeProfileId
+      ? buildNodesForProfile(displays, activeProfileId)
+      : buildNodesForDisplays(displays);
     setNodes(canvasNodes);
     setDirty(false);
-  }, [displays, setDirty, setNodes]);
+  }, [activeProfileId, buildNodesForDisplays, buildNodesForProfile, displays, setDirty, setNodes]);
+
+  useEffect(() => {
+    const profile = profiles.find((item) => item.id === activeProfileId);
+    if (profile) {
+      setProfileName(profile.name);
+    }
+  }, [activeProfileId, profiles]);
 
   const selectedDisplay = useMemo(
     () => displays.find((display) => (display.stableId ?? display.id) === selectedDisplayId) ?? displays[0],
@@ -141,10 +178,23 @@ export function App() {
 
   const handleSaveProfile = async () => {
     const name = profileName.trim();
-    if (!name) {
+    if (!name || !activeProfileId) {
       return;
     }
 
+    const profile = await updateProfile(activeProfileId, {
+      name,
+      description: null,
+      layout: currentLayout(),
+    });
+
+    if (profile) {
+      setDirty(false);
+    }
+  };
+
+  const handleAddProfile = async () => {
+    const name = profileName.trim() || `Profile ${profiles.length + 1}`;
     const profile = await saveProfile({
       name,
       description: null,
@@ -152,8 +202,22 @@ export function App() {
     });
 
     if (profile) {
-      setProfileName(`${name} Copy`);
+      selectProfile(profile.id);
+      setProfileName(profile.name);
+      setDirty(false);
     }
+  };
+
+  const handleOpenProfile = (profileId: string) => {
+    const profile = profiles.find((item) => item.id === profileId);
+    if (!profile) {
+      return;
+    }
+
+    selectProfile(profile.id);
+    setProfileName(profile.name);
+    setNodes(buildNodesForProfile(displays, profile.id));
+    setDirty(false);
   };
 
   const handleApplyLayout = async () => {
@@ -191,9 +255,17 @@ export function App() {
             <RefreshCcw size={16} />
             Refresh
           </button>
-          <button type="button" onClick={() => void handleSaveProfile()} disabled={displays.length === 0}>
+          <button type="button" onClick={() => void handleAddProfile()} disabled={displays.length === 0}>
+            <Plus size={16} />
+            Add Profile
+          </button>
+          <button
+            type="button"
+            onClick={() => void handleSaveProfile()}
+            disabled={displays.length === 0 || !activeProfileId}
+          >
             <Save size={16} />
-            Save Profile
+            Save Changes
           </button>
           <button
             type="button"
@@ -215,54 +287,78 @@ export function App() {
           </div>
           <div className="profile-list">
             {profiles.length === 0 ? (
-              <p className="empty-state">Save the current arrangement to create your first profile.</p>
+              <p className="empty-state">Use Add Profile to save the current arrangement.</p>
             ) : null}
             {profiles.map((profile) => (
-              <article key={profile.id} className="profile-row">
+              <article
+                key={profile.id}
+                className={clsx("profile-row", activeProfileId === profile.id && "profile-row-active")}
+              >
                 <button
                   type="button"
                   className="profile-main"
-                  onClick={() => {
-                    void applyProfile(profile.id).then((result) => {
-                      if (result?.applied) {
-                        void refreshDisplays();
-                      }
-                    });
-                  }}
+                  onClick={() => handleOpenProfile(profile.id)}
                 >
                   <strong>{profile.name}</strong>
-                  <span>{profile.layout.displays.length} displays</span>
+                  <span>
+                    {profile.layout.displays.length} displays
+                    {activeProfileId === profile.id ? " · open" : ""}
+                  </span>
                 </button>
                 <div className="profile-actions">
                   <button
                     type="button"
-                    aria-label={`Rename ${profile.name}`}
-                    onClick={() => {
-                      const name = window.prompt("Profile name", profile.name);
-                      if (name?.trim()) {
-                        void renameProfile(profile.id, name.trim());
-                      }
+                    aria-label={`Apply ${profile.name}`}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      handleOpenProfile(profile.id);
+                      void applyProfile(profile.id).then((result) => {
+                        if (result?.applied) {
+                          void refreshDisplays();
+                        }
+                      });
                     }}
                   >
-                    <Save size={14} />
+                    <Zap size={14} />
                   </button>
                   <button
                     type="button"
                     aria-label={`Duplicate ${profile.name}`}
-                    onClick={() => void duplicateProfile(profile.id)}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      void duplicateProfile(profile.id);
+                    }}
                   >
                     <Copy size={14} />
                   </button>
                   <button
                     type="button"
                     aria-label={`Delete ${profile.name}`}
-                    onClick={() => {
-                      if (window.confirm(`Delete "${profile.name}"?`)) {
-                        void deleteProfile(profile.id);
-                      }
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      void deleteProfile(profile.id).then(() => {
+                        if (activeProfileId === profile.id) {
+                          setProfileName("Work Desk");
+                          setNodes(buildNodesForDisplays(displays));
+                          setDirty(false);
+                        }
+                      });
                     }}
                   >
                     <Trash2 size={14} />
+                  </button>
+                  <button
+                    type="button"
+                    aria-label={`Rename ${profile.name} from name field`}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      const name = profileName.trim();
+                      if (name && activeProfileId === profile.id) {
+                        void renameProfile(profile.id, name);
+                      }
+                    }}
+                  >
+                    <Save size={14} />
                   </button>
                 </div>
               </article>

@@ -10,7 +10,9 @@ type ProfileState = {
   error: string | null;
   lastApplyResult: ApplyLayoutResult | null;
   loadProfiles: () => Promise<void>;
+  selectProfile: (id: string | null) => void;
   saveProfile: (draft: LayoutProfileDraft) => Promise<LayoutProfile | null>;
+  updateProfile: (id: string, draft: LayoutProfileDraft) => Promise<LayoutProfile | null>;
   renameProfile: (id: string, name: string) => Promise<void>;
   duplicateProfile: (id: string) => Promise<void>;
   deleteProfile: (id: string) => Promise<void>;
@@ -38,11 +40,26 @@ export const useProfileStore = create<ProfileState>((set, get) => ({
       set({ isLoading: false, error: errorMessage(error) });
     }
   },
+  selectProfile: (activeProfileId) => set({ activeProfileId }),
   saveProfile: async (draft) => {
     set({ error: null });
     try {
       const profile = await api.saveProfile(draft);
       set({ profiles: [profile, ...get().profiles], activeProfileId: profile.id });
+      return profile;
+    } catch (error) {
+      set({ error: errorMessage(error) });
+      return null;
+    }
+  },
+  updateProfile: async (id, draft) => {
+    set({ error: null });
+    try {
+      const profile = await api.updateProfile(id, draft);
+      set({
+        profiles: get().profiles.map((item) => (item.id === id ? profile : item)),
+        activeProfileId: id,
+      });
       return profile;
     } catch (error) {
       set({ error: errorMessage(error) });
@@ -62,7 +79,7 @@ export const useProfileStore = create<ProfileState>((set, get) => ({
     set({ error: null });
     try {
       const profile = await api.duplicateProfile(id);
-      set({ profiles: [profile, ...get().profiles] });
+      set({ profiles: [profile, ...get().profiles], activeProfileId: profile.id });
     } catch (error) {
       set({ error: errorMessage(error) });
     }
