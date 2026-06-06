@@ -5,13 +5,13 @@ use chrono::Utc;
 use uuid::Uuid;
 
 use crate::display_engine::models::{
-    ApplyLayoutResult, Layout, LayoutProfile, LayoutProfileDraft, PlatformName, ProfileMetadata,
+    Layout, LayoutProfile, LayoutProfileDraft, PlatformName, ProfileMetadata,
 };
 use crate::errors::AppError;
 
 const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
 
-fn app_data_dir() -> Result<PathBuf, AppError> {
+pub(crate) fn app_data_dir() -> Result<PathBuf, AppError> {
     #[cfg(test)]
     {
         let dir = std::env::temp_dir().join("display-layout-manager-tests");
@@ -177,13 +177,6 @@ pub fn mark_profile_applied(id: &str) -> Result<(), AppError> {
 pub fn save_last_known_good(layout: &Layout) -> Result<(), AppError> {
     let path = last_known_good_path()?;
     fs::write(path, serde_json::to_string_pretty(layout)?)?;
-    Ok(())
-}
-
-pub fn persist_apply_recovery(result: &ApplyLayoutResult) -> Result<(), AppError> {
-    if let Some(previous_layout) = &result.previous_layout {
-        save_last_known_good(previous_layout)?;
-    }
     Ok(())
 }
 

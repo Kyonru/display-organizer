@@ -32,6 +32,15 @@ pub fn run() {
             commands::delete_profile,
             commands::apply_layout,
             commands::apply_profile,
+            commands::get_automation_rules,
+            commands::save_automation_rule,
+            commands::delete_automation_rule,
+            commands::evaluate_automation_rules,
+            commands::record_automation_event,
+            commands::get_recovery_state,
+            commands::keep_recovery,
+            commands::revert_recovery,
+            commands::export_diagnostics,
         ])
         .run(tauri::generate_context!())
         .expect("failed to run Display Layout Manager");

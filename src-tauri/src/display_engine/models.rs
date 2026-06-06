@@ -258,6 +258,137 @@ pub enum PlatformName {
     Linux,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct AutomationRuleMatch {
+    #[serde(default)]
+    pub display_stable_ids: Vec<String>,
+    #[serde(default)]
+    pub display_count: Option<usize>,
+    #[serde(default)]
+    pub require_internal: Option<bool>,
+    #[serde(default)]
+    pub require_external: Option<bool>,
+    #[serde(default)]
+    pub dock_signature: Option<String>,
+    #[serde(default)]
+    pub platform: Option<PlatformName>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct AutomationRule {
+    pub id: String,
+    pub name: String,
+    pub enabled: bool,
+    pub profile_id: String,
+    #[serde(rename = "match")]
+    pub match_config: AutomationRuleMatch,
+    pub created_at: String,
+    pub updated_at: String,
+    pub last_triggered_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct AutomationRuleDraft {
+    #[serde(default)]
+    pub id: Option<String>,
+    pub name: String,
+    pub enabled: bool,
+    pub profile_id: String,
+    #[serde(rename = "match")]
+    pub match_config: AutomationRuleMatch,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct AutomationMatchResult {
+    pub rule: AutomationRule,
+    pub profile_name: String,
+    pub score: u32,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct AutomationEvaluation {
+    pub matches: Vec<AutomationMatchResult>,
+    pub evaluated_at: String,
+    pub display_count: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct AutomationEvent {
+    pub id: String,
+    pub rule_id: Option<String>,
+    pub profile_id: Option<String>,
+    pub event_type: AutomationEventType,
+    pub message: String,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub enum AutomationEventType {
+    Matched,
+    Applied,
+    Skipped,
+    Failed,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct RecoveryState {
+    pub id: String,
+    pub previous_layout: Layout,
+    pub applied_layout: Option<Layout>,
+    pub created_at: String,
+    pub expires_at: String,
+    pub message: String,
+    #[serde(default)]
+    pub display_results: Vec<ApplyDisplayChangeResult>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct DiagnosticsProfileSummary {
+    pub id: String,
+    pub name: String,
+    pub display_count: usize,
+    pub updated_at: String,
+    pub last_applied_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct DiagnosticsDisplaySnapshot {
+    pub stable_id_hash: String,
+    pub name: String,
+    pub resolution: Size,
+    pub refresh_rate: Option<f64>,
+    pub scale_factor: f64,
+    pub position: Point,
+    pub rotation: DisplayRotation,
+    pub is_primary: bool,
+    pub is_internal: bool,
+    pub capabilities: DisplayCapabilities,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct DiagnosticsBundle {
+    pub app_version: String,
+    pub generated_at: String,
+    pub platform: PlatformName,
+    pub displays: Vec<DiagnosticsDisplaySnapshot>,
+    pub profiles: Vec<DiagnosticsProfileSummary>,
+    pub automation_rules: Vec<AutomationRule>,
+    pub recent_events: Vec<AutomationEvent>,
+    pub recovery_state: Option<RecoveryState>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LayoutProfileDraft {

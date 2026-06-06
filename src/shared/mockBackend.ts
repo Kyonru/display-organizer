@@ -1,6 +1,22 @@
-import type { ApplyLayoutResult, Display, Layout, LayoutProfile, LayoutProfileDraft } from "./types";
+import type {
+  ApplyLayoutResult,
+  AutomationEvaluation,
+  AutomationEvent,
+  AutomationEventType,
+  AutomationRule,
+  AutomationRuleDraft,
+  DiagnosticsBundle,
+  Display,
+  Layout,
+  LayoutProfile,
+  LayoutProfileDraft,
+  RecoveryState,
+} from "./types";
 
 const PROFILE_STORAGE_KEY = "display-layout-manager.mock.profiles";
+const AUTOMATION_STORAGE_KEY = "display-layout-manager.mock.automationRules";
+const AUTOMATION_EVENTS_KEY = "display-layout-manager.mock.automationEvents";
+const RECOVERY_STORAGE_KEY = "display-layout-manager.mock.recovery";
 
 export const mockDisplays: Display[] = [
   {
@@ -113,6 +129,61 @@ function writeProfiles(profiles: LayoutProfile[]) {
   window.localStorage.setItem(PROFILE_STORAGE_KEY, JSON.stringify(profiles));
 }
 
+function readAutomationRules(): AutomationRule[] {
+  const raw = window.localStorage.getItem(AUTOMATION_STORAGE_KEY);
+  if (!raw) {
+    return [];
+  }
+
+  try {
+    return JSON.parse(raw) as AutomationRule[];
+  } catch {
+    return [];
+  }
+}
+
+function writeAutomationRules(rules: AutomationRule[]) {
+  window.localStorage.setItem(AUTOMATION_STORAGE_KEY, JSON.stringify(rules));
+}
+
+function readAutomationEvents(): AutomationEvent[] {
+  const raw = window.localStorage.getItem(AUTOMATION_EVENTS_KEY);
+  if (!raw) {
+    return [];
+  }
+
+  try {
+    return JSON.parse(raw) as AutomationEvent[];
+  } catch {
+    return [];
+  }
+}
+
+function writeAutomationEvents(events: AutomationEvent[]) {
+  window.localStorage.setItem(AUTOMATION_EVENTS_KEY, JSON.stringify(events.slice(0, 50)));
+}
+
+function readRecoveryState(): RecoveryState | null {
+  const raw = window.localStorage.getItem(RECOVERY_STORAGE_KEY);
+  if (!raw) {
+    return null;
+  }
+
+  try {
+    return JSON.parse(raw) as RecoveryState;
+  } catch {
+    return null;
+  }
+}
+
+function writeRecoveryState(state: RecoveryState | null) {
+  if (state) {
+    window.localStorage.setItem(RECOVERY_STORAGE_KEY, JSON.stringify(state));
+  } else {
+    window.localStorage.removeItem(RECOVERY_STORAGE_KEY);
+  }
+}
+
 export function getMockProfiles(): Promise<LayoutProfile[]> {
   return Promise.resolve(readProfiles());
 }
@@ -192,10 +263,23 @@ export function deleteMockProfile(profileId: string): Promise<void> {
 }
 
 export function applyMockLayout(layout: Layout): Promise<ApplyLayoutResult> {
-  return Promise.resolve({
+  const previousLayout: Layout = {
+    displays: mockDisplays.map((display) => ({
+      stableId: display.stableId ?? display.id,
+      modeId: display.modeId,
+      position: display.position,
+      resolution: display.resolution,
+      refreshRate: display.refreshRate,
+      scaleFactor: display.scaleFactor,
+      rotation: display.rotation,
+      enabled: true,
+    })),
+    primaryDisplayStableId: mockDisplays.find((display) => display.isPrimary)?.stableId ?? null,
+  };
+  const result: ApplyLayoutResult = {
     applied: true,
     message: "Preview layout applied. Open the Tauri app to apply changes to macOS.",
-    previousLayout: null,
+    previousLayout,
     appliedLayout: layout,
     displayResults: layout.displays.map((display) => ({
       stableId: display.stableId,
@@ -208,6 +292,19 @@ export function applyMockLayout(layout: Layout): Promise<ApplyLayoutResult> {
         scale: Boolean(display.modeId),
       },
     })),
+  };
+  writeRecoveryState({
+    id: id(),
+    previousLayout,
+    appliedLayout: layout,
+    createdAt: now(),
+    expiresAt: new Date(Date.now() + 20_000).toISOString(),
+    message: result.message,
+    displayResults: result.displayResults ?? [],
+  });
+
+  return Promise.resolve({
+    ...result,
   });
 }
 
@@ -222,4 +319,153 @@ export function applyMockProfile(profileId: string): Promise<ApplyLayoutResult> 
   profile.updatedAt = now();
   writeProfiles(profiles);
   return applyMockLayout(profile.layout);
+}
+
+export function getMockAutomationRules(): Promise<AutomationRule[]> {
+  return Promise.resolve(readAutomationRules());
+}
+
+export function saveMockAutomationRule(draft: AutomationRuleDraft): Promise<AutomationRule> {
+  const rules = readAutomationRules();
+  const timestamp = now();
+  const existing = draft.id ? rules.find((rule) => rule.id === draft.id) : null;
+  const rule: AutomationRule = existing
+    ? {
+        ...existing,
+        name: draft.name,
+        enabled: draft.enabled,
+        profileId: draft.profileId,
+        match: draft.match,
+        updatedAt: timestamp,
+      }
+    : {
+        id: id(),
+        name: draft.name,
+        enabled: draft.enabled,
+        profileId: draft.profileId,
+        match: draft.match,
+        createdAt: timestamp,
+        updatedAt: timestamp,
+        lastTriggeredAt: null,
+      };
+
+  writeAutomationRules(existing ? rules.map((item) => (item.id === rule.id ? rule : item)) : [rule, ...rules]);
+  return Promise.resolve(rule);
+}
+
+export function deleteMockAutomationRule(ruleId: string): Promise<void> {
+  writeAutomationRules(readAutomationRules().filter((rule) => rule.id !== ruleId));
+  return Promise.resolve();
+}
+
+function ruleMatches(rule: AutomationRule, profiles: LayoutProfile[]) {
+  if (!rule.enabled || !profiles.some((profile) => profile.id === rule.profileId)) {
+    return false;
+  }
+
+  const displayIds = new Set(mockDisplays.map((display) => display.stableId ?? display.id));
+  const expectedIds = new Set(rule.match.displayStableIds);
+  const idsMatch =
+    expectedIds.size === 0 ||
+    (expectedIds.size === displayIds.size && [...expectedIds].every((displayId) => displayIds.has(displayId)));
+
+  return (
+    idsMatch &&
+    (rule.match.displayCount === null || rule.match.displayCount === mockDisplays.length) &&
+    (rule.match.requireInternal === null ||
+      mockDisplays.some((display) => display.isInternal) === rule.match.requireInternal) &&
+    (rule.match.requireExternal === null ||
+      mockDisplays.some((display) => !display.isInternal) === rule.match.requireExternal) &&
+    (rule.match.platform === null || rule.match.platform === "macos")
+  );
+}
+
+export function evaluateMockAutomationRules(): Promise<AutomationEvaluation> {
+  const profiles = readProfiles();
+  const matches = readAutomationRules()
+    .filter((rule) => ruleMatches(rule, profiles))
+    .map((rule) => ({
+      rule,
+      profileName: profiles.find((profile) => profile.id === rule.profileId)?.name ?? "Profile",
+      score: 100 + (rule.match.displayCount === null ? 0 : 10),
+      reason: "exact display set",
+    }))
+    .sort((left, right) => right.score - left.score);
+
+  return Promise.resolve({
+    matches,
+    evaluatedAt: now(),
+    displayCount: mockDisplays.length,
+  });
+}
+
+export function recordMockAutomationEvent(
+  ruleId: string | null,
+  profileId: string | null,
+  eventType: AutomationEventType,
+  message: string,
+): Promise<AutomationEvent> {
+  if (eventType === "applied" && ruleId) {
+    writeAutomationRules(
+      readAutomationRules().map((rule) =>
+        rule.id === ruleId ? { ...rule, lastTriggeredAt: now(), updatedAt: now() } : rule,
+      ),
+    );
+  }
+
+  const event: AutomationEvent = {
+    id: id(),
+    ruleId,
+    profileId,
+    eventType,
+    message,
+    createdAt: now(),
+  };
+  writeAutomationEvents([event, ...readAutomationEvents()]);
+  return Promise.resolve(event);
+}
+
+export function getMockRecoveryState(): Promise<RecoveryState | null> {
+  return Promise.resolve(readRecoveryState());
+}
+
+export function keepMockRecovery(): Promise<void> {
+  writeRecoveryState(null);
+  return Promise.resolve();
+}
+
+export function revertMockRecovery(): Promise<ApplyLayoutResult> {
+  const state = readRecoveryState();
+  writeRecoveryState(null);
+  return applyMockLayout(state?.previousLayout ?? { displays: [], primaryDisplayStableId: null });
+}
+
+export function exportMockDiagnostics(): Promise<DiagnosticsBundle> {
+  return Promise.resolve({
+    appVersion: "0.1.0-preview",
+    generatedAt: now(),
+    platform: "macos",
+    displays: mockDisplays.map((display) => ({
+      stableIdHash: `mock-${display.stableId ?? display.id}`,
+      name: display.name,
+      resolution: display.resolution,
+      refreshRate: display.refreshRate,
+      scaleFactor: display.scaleFactor,
+      position: display.position,
+      rotation: display.rotation,
+      isPrimary: display.isPrimary,
+      isInternal: display.isInternal,
+      capabilities: display.capabilities,
+    })),
+    profiles: readProfiles().map((profile) => ({
+      id: profile.id,
+      name: profile.name,
+      displayCount: profile.layout.displays.length,
+      updatedAt: profile.updatedAt,
+      lastAppliedAt: profile.lastAppliedAt ?? null,
+    })),
+    automationRules: readAutomationRules(),
+    recentEvents: readAutomationEvents(),
+    recoveryState: readRecoveryState(),
+  });
 }

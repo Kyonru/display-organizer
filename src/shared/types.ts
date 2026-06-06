@@ -101,6 +101,58 @@ export type LayoutProfileDraft = {
   layout: Layout;
 };
 
+export type AutomationRuleMatch = {
+  displayStableIds: string[];
+  displayCount: number | null;
+  requireInternal: boolean | null;
+  requireExternal: boolean | null;
+  dockSignature: string | null;
+  platform: "macos" | "windows" | "linux" | null;
+};
+
+export type AutomationRule = {
+  id: string;
+  name: string;
+  enabled: boolean;
+  profileId: string;
+  match: AutomationRuleMatch;
+  createdAt: string;
+  updatedAt: string;
+  lastTriggeredAt: string | null;
+};
+
+export type AutomationRuleDraft = {
+  id?: string | null;
+  name: string;
+  enabled: boolean;
+  profileId: string;
+  match: AutomationRuleMatch;
+};
+
+export type AutomationMatchResult = {
+  rule: AutomationRule;
+  profileName: string;
+  score: number;
+  reason: string;
+};
+
+export type AutomationEvaluation = {
+  matches: AutomationMatchResult[];
+  evaluatedAt: string;
+  displayCount: number;
+};
+
+export type AutomationEventType = "matched" | "applied" | "skipped" | "failed";
+
+export type AutomationEvent = {
+  id: string;
+  ruleId: string | null;
+  profileId: string | null;
+  eventType: AutomationEventType;
+  message: string;
+  createdAt: string;
+};
+
 export type ApplyLayoutResult = {
   applied: boolean;
   message: string;
@@ -119,4 +171,46 @@ export type ApplyDisplayChangeResult = {
     rotation: boolean;
     scale: boolean;
   };
+};
+
+export type RecoveryState = {
+  id: string;
+  previousLayout: Layout;
+  appliedLayout: Layout | null;
+  createdAt: string;
+  expiresAt: string;
+  message: string;
+  displayResults: ApplyDisplayChangeResult[];
+};
+
+export type DiagnosticsProfileSummary = {
+  id: string;
+  name: string;
+  displayCount: number;
+  updatedAt: string;
+  lastAppliedAt: string | null;
+};
+
+export type DiagnosticsDisplaySnapshot = {
+  stableIdHash: string;
+  name: string;
+  resolution: Size;
+  refreshRate: number | null;
+  scaleFactor: number;
+  position: Point;
+  rotation: DisplayRotation;
+  isPrimary: boolean;
+  isInternal: boolean;
+  capabilities: DisplayCapabilities;
+};
+
+export type DiagnosticsBundle = {
+  appVersion: string;
+  generatedAt: string;
+  platform: "macos" | "windows" | "linux";
+  displays: DiagnosticsDisplaySnapshot[];
+  profiles: DiagnosticsProfileSummary[];
+  automationRules: AutomationRule[];
+  recentEvents: AutomationEvent[];
+  recoveryState: RecoveryState | null;
 };

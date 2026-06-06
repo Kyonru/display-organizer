@@ -10,9 +10,10 @@ import {
   useEdgesState,
   useNodesState,
 } from "@xyflow/react";
-import { Copy, Monitor, Moon, Plus, RefreshCcw, Save, Sun, Trash2, Zap } from "lucide-react";
+import { Copy, FileDown, Monitor, Moon, Plus, RefreshCcw, Save, Sun, Trash2, Zap } from "lucide-react";
 import { listen } from "@tauri-apps/api/event";
 import { clsx } from "clsx";
+import { useBetaStore } from "../features/betaStore";
 import { useCanvasStore } from "../features/canvas/canvasStore";
 import {
   CANVAS_SCALE,
@@ -120,11 +121,29 @@ export function App() {
     applyProfile,
   } = useProfileStore();
   const { gridSize, snapToGrid, setDirty, isDirty, setSelectedDisplayIds } = useCanvasStore();
+  const {
+    automationRules,
+    pendingAutomationMatches,
+    recoveryState,
+    error: betaError,
+    loadAutomationRules,
+    saveAutomationRule,
+    deleteAutomationRule,
+    evaluateAutomation,
+    clearPendingAutomation,
+    loadRecoveryState,
+    keepRecovery,
+    revertRecovery,
+    exportDiagnostics,
+  } = useBetaStore();
   const [nodes, setNodes, onNodesChange] = useNodesState<Node<MonitorNodeData>>([]);
   const [edges, , onEdgesChange] = useEdgesState([]);
   const [selectedDisplayId, setSelectedDisplayId] = useState<string | null>(null);
   const selectedDisplayIdRef = useRef<string | null>(null);
+  const automationPromptSignatureRef = useRef<string | null>(null);
   const [profileName, setProfileName] = useState("Work Desk");
+  const [recoverySecondsRemaining, setRecoverySecondsRemaining] = useState(0);
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
 
   useEffect(() => {
     document.documentElement.classList.toggle("dark", theme === "dark");
@@ -213,7 +232,81 @@ export function App() {
   useEffect(() => {
     void refreshDisplays();
     void loadProfiles();
-  }, [loadProfiles, refreshDisplays]);
+    void loadAutomationRules();
+    void loadRecoveryState();
+  }, [loadAutomationRules, loadProfiles, loadRecoveryState, refreshDisplays]);
+
+  useEffect(() => {
+    if (!recoveryState) {
+      setRecoverySecondsRemaining(0);
+      return;
+    }
+
+    const updateRemaining = () => {
+      setRecoverySecondsRemaining(
+        Math.max(0, Math.ceil((new Date(recoveryState.expiresAt).getTime() - Date.now()) / 1000)),
+      );
+    };
+
+    updateRemaining();
+    const interval = window.setInterval(updateRemaining, 1000);
+    return () => window.clearInterval(interval);
+  }, [recoveryState]);
+
+  useEffect(() => {
+    if (!toastMessage) {
+      return;
+    }
+
+    const timeout = window.setTimeout(() => setToastMessage(null), 3200);
+    return () => window.clearTimeout(timeout);
+  }, [toastMessage]);
+
+  useEffect(() => {
+    if (automationRules.length === 0 || profiles.length === 0 || displays.length === 0 || isApplying) {
+      return;
+    }
+
+    const timeout = window.setTimeout(() => {
+      void evaluateAutomation().then((evaluation) => {
+        if (!evaluation || evaluation.matches.length === 0) {
+          return;
+        }
+
+        const signature = evaluation.matches
+          .map((match) => match.rule.id)
+          .join(":");
+
+        if (automationPromptSignatureRef.current === signature) {
+          void clearPendingAutomation("skipped", "Duplicate automation prompt suppressed");
+          return;
+        }
+
+        automationPromptSignatureRef.current = signature;
+      });
+    }, 2000);
+
+    return () => window.clearTimeout(timeout);
+  }, [
+    automationRules.length,
+    clearPendingAutomation,
+    displays,
+    evaluateAutomation,
+    isApplying,
+    profiles.length,
+  ]);
+
+  useEffect(() => {
+    if (pendingAutomationMatches.length === 0) {
+      return;
+    }
+
+    const timeout = window.setTimeout(() => {
+      void clearPendingAutomation("skipped", "Automation confirmation expired");
+    }, 30_000);
+
+    return () => window.clearTimeout(timeout);
+  }, [clearPendingAutomation, pendingAutomationMatches.length]);
 
   useEffect(() => {
     const canvasNodes = activeProfileId
@@ -440,8 +533,94 @@ export function App() {
     if (result?.applied) {
       setDirty(false);
       await refreshDisplays();
+      await loadRecoveryState();
     }
-  }, [applyLayout, currentLayout, displays.length, refreshDisplays, setDirty]);
+  }, [applyLayout, currentLayout, displays.length, loadRecoveryState, refreshDisplays, setDirty]);
+
+  const handleCreateAutomationRule = async () => {
+    const profile = profiles.find((item) => item.id === activeProfileId);
+    if (!profile || displays.length === 0) {
+      return;
+    }
+
+    await saveAutomationRule({
+      name: `${profile.name} setup`,
+      enabled: true,
+      profileId: profile.id,
+      match: {
+        displayStableIds: displays.map((display) => display.stableId ?? display.id).sort(),
+        displayCount: displays.length,
+        requireInternal: displays.some((display) => display.isInternal),
+        requireExternal: displays.some((display) => !display.isInternal),
+        dockSignature: null,
+        platform: "macos",
+      },
+    });
+  };
+
+  const handleToggleAutomationRule = async (ruleId: string) => {
+    const rule = automationRules.find((item) => item.id === ruleId);
+    if (!rule) {
+      return;
+    }
+
+    await saveAutomationRule({
+      id: rule.id,
+      name: rule.name,
+      enabled: !rule.enabled,
+      profileId: rule.profileId,
+      match: rule.match,
+    });
+  };
+
+  const handleApplyAutomationMatch = async (matchIndex: number) => {
+    const match = pendingAutomationMatches[matchIndex];
+    if (!match) {
+      return;
+    }
+
+    const result = await applyProfile(match.rule.profileId);
+    if (result?.applied) {
+      await clearPendingAutomation("applied", `Applied ${match.profileName}`);
+      await refreshDisplays();
+      await loadRecoveryState();
+    } else {
+      await clearPendingAutomation("failed", `Failed to apply ${match.profileName}`);
+    }
+  };
+
+  const handleKeepRecovery = async () => {
+    await keepRecovery();
+  };
+
+  const handleRevertRecovery = async () => {
+    const reverted = await revertRecovery();
+    if (reverted) {
+      setDirty(false);
+      await refreshDisplays();
+    }
+  };
+
+  const handleExportDiagnostics = async () => {
+    const diagnostics = await exportDiagnostics();
+    if (!diagnostics) {
+      return;
+    }
+
+    const blob = new Blob([JSON.stringify(diagnostics, null, 2)], {
+      type: "application/json",
+    });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    const filename = `display-layout-diagnostics-${new Date().toISOString().replace(/[:.]/g, "-")}.json`;
+    anchor.href = url;
+    anchor.download = filename;
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    URL.revokeObjectURL(url);
+    setToastMessage(`Diagnostics downloaded: ${filename}`);
+  };
 
   useEffect(() => {
     if (!isNativeApp) {
@@ -464,6 +643,7 @@ export function App() {
         if (result?.applied) {
           setDirty(false);
           await refreshDisplays();
+          await loadRecoveryState();
         }
       });
     });
@@ -473,7 +653,7 @@ export function App() {
       void unlistenApply.then((unlisten) => unlisten());
       void unlistenApplyProfile.then((unlisten) => unlisten());
     };
-  }, [applyProfile, handleApplyLayout, isNativeApp, refreshDisplays, setDirty]);
+  }, [applyProfile, handleApplyLayout, isNativeApp, loadRecoveryState, refreshDisplays, setDirty]);
 
   const selectedStableId = selectedDisplay ? selectedDisplay.stableId ?? selectedDisplay.id : null;
   const selectedScaleValue =
@@ -554,6 +734,14 @@ export function App() {
             Apply
           </button>
           <button
+            className={buttonBase}
+            type="button"
+            onClick={() => void handleExportDiagnostics()}
+          >
+            <FileDown size={16} />
+            Diagnostics
+          </button>
+          <button
             type="button"
             className={iconButton}
             aria-label={`Switch to ${theme === "dark" ? "light" : "dark"} mode`}
@@ -618,6 +806,7 @@ export function App() {
                       void applyProfile(profile.id).then((result) => {
                         if (result?.applied) {
                           void refreshDisplays();
+                          void loadRecoveryState();
                         }
                       });
                     }}
@@ -656,6 +845,64 @@ export function App() {
               </article>
             ))}
           </div>
+          <div className="mt-4 border-t border-zinc-200 pt-3 dark:border-zinc-800">
+            <div className="mb-2 flex items-center justify-between">
+              <h2 className="text-xs font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
+                Automation
+              </h2>
+              <button
+                type="button"
+                className={iconButton}
+                aria-label="Test automation rules"
+                onClick={() => void evaluateAutomation()}
+              >
+                <RefreshCcw size={14} />
+              </button>
+            </div>
+            <button
+              type="button"
+              className={buttonBase}
+              disabled={!activeProfileId || displays.length === 0}
+              onClick={() => void handleCreateAutomationRule()}
+            >
+              <Plus size={14} />
+              Add Rule
+            </button>
+            <div className="mt-2 space-y-1.5">
+              {automationRules.length === 0 ? (
+                <p className="rounded border border-dashed border-zinc-300 p-2 text-xs leading-5 text-zinc-500 dark:border-zinc-800 dark:text-zinc-400">
+                  Add a rule from an open profile and the current display setup.
+                </p>
+              ) : null}
+              {automationRules.map((rule) => (
+                <article
+                  key={rule.id}
+                  className="flex items-start gap-2 rounded border border-zinc-200 bg-white p-2 dark:border-zinc-800 dark:bg-zinc-900/70"
+                >
+                  <button
+                    type="button"
+                    className="min-w-0 flex-1 text-left"
+                    onClick={() => void handleToggleAutomationRule(rule.id)}
+                  >
+                    <strong className="block truncate text-xs font-semibold text-zinc-900 dark:text-zinc-100">
+                      {rule.name}
+                    </strong>
+                    <span className="mt-0.5 block text-[11px] text-zinc-500 dark:text-zinc-400">
+                      {rule.enabled ? "Enabled" : "Paused"} · {rule.match.displayCount ?? rule.match.displayStableIds.length} displays
+                    </span>
+                  </button>
+                  <button
+                    type="button"
+                    className={iconButton}
+                    aria-label={`Delete ${rule.name}`}
+                    onClick={() => void deleteAutomationRule(rule.id)}
+                  >
+                    <Trash2 size={14} />
+                  </button>
+                </article>
+              ))}
+            </div>
+          </div>
         </aside>
 
         <section className="min-h-0 min-w-0 bg-zinc-100 dark:bg-zinc-950">
@@ -692,6 +939,62 @@ export function App() {
                 </span>
               </div>
             </Panel>
+            {recoveryState ? (
+              <Panel position="top-center" className="!m-3">
+                <div className="flex max-w-[520px] items-center gap-2 rounded border border-amber-200 bg-amber-50/95 px-2.5 py-1.5 text-xs text-amber-900 shadow-sm backdrop-blur dark:border-amber-900/60 dark:bg-amber-950/90 dark:text-amber-100">
+                  <span className="min-w-0 flex-1 truncate">
+                    Recovery available · {recoverySecondsRemaining}s
+                  </span>
+                  <button type="button" className={buttonBase} onClick={() => void handleKeepRecovery()}>
+                    Keep
+                  </button>
+                  <button type="button" className={primaryButton} onClick={() => void handleRevertRecovery()}>
+                    Revert
+                  </button>
+                </div>
+              </Panel>
+            ) : null}
+            {pendingAutomationMatches.length > 0 ? (
+              <Panel position="bottom-center" className="!m-3">
+                <div className="max-w-[520px] rounded border border-emerald-200 bg-white/95 p-2 text-xs shadow-sm backdrop-blur dark:border-emerald-900/60 dark:bg-zinc-900/95">
+                  <div className="mb-1 flex items-center justify-between gap-2">
+                    <strong className="truncate text-zinc-900 dark:text-zinc-100">
+                      {pendingAutomationMatches.length === 1
+                        ? `Apply ${pendingAutomationMatches[0].profileName}?`
+                        : "Automation matches"}
+                    </strong>
+                    <button
+                      type="button"
+                      className={iconButton}
+                      aria-label="Dismiss automation prompt"
+                      onClick={() => void clearPendingAutomation("skipped", "Automation prompt dismissed")}
+                    >
+                      <Trash2 size={13} />
+                    </button>
+                  </div>
+                  <div className="space-y-1">
+                    {pendingAutomationMatches.map((match, index) => (
+                      <button
+                        key={match.rule.id}
+                        type="button"
+                        className="flex w-full items-center justify-between gap-3 rounded border border-zinc-200 bg-zinc-50 px-2 py-1.5 text-left text-xs hover:bg-zinc-100 dark:border-zinc-800 dark:bg-zinc-950 dark:hover:bg-zinc-800"
+                        onClick={() => void handleApplyAutomationMatch(index)}
+                      >
+                        <span className="min-w-0">
+                          <span className="block truncate font-medium text-zinc-900 dark:text-zinc-100">
+                            {match.profileName}
+                          </span>
+                          <span className="block truncate text-[11px] text-zinc-500 dark:text-zinc-400">
+                            {match.reason}
+                          </span>
+                        </span>
+                        <Zap size={14} />
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </Panel>
+            ) : null}
             <Background gap={gridSize} color={theme === "dark" ? "#3f3f46" : "#d4d4d8"} />
             <MiniMap
               pannable
@@ -806,10 +1109,18 @@ export function App() {
               ) : null}
             </div>
           ) : null}
-          {displayError || profileError ? (
-            <p className="mt-3 rounded border border-red-200 bg-red-50 p-2 text-xs leading-5 text-red-700 dark:border-red-900/60 dark:bg-red-950/50 dark:text-red-200">
-              {displayError ?? profileError}
-            </p>
+          {displayError || profileError || betaError ? (
+            <div className="mt-3 rounded border border-red-200 bg-red-50 p-2 text-xs leading-5 text-red-700 dark:border-red-900/60 dark:bg-red-950/50 dark:text-red-200">
+              {displayError ?? profileError ?? betaError}
+              <button
+                type="button"
+                className="mt-2 flex items-center gap-1 font-semibold underline"
+                onClick={() => void handleExportDiagnostics()}
+              >
+                <FileDown size={13} />
+                Export diagnostics
+              </button>
+            </div>
           ) : null}
           {lastApplyResult ? (
             <p className="mt-3 rounded border border-emerald-200 bg-emerald-50 p-2 text-xs leading-5 text-emerald-700 dark:border-emerald-900/60 dark:bg-emerald-950/50 dark:text-emerald-200">
@@ -818,6 +1129,16 @@ export function App() {
           ) : null}
         </aside>
       </section>
+      {toastMessage ? (
+        <div
+          role="status"
+          aria-live="polite"
+          className="pointer-events-none fixed bottom-3 right-3 z-50 flex max-w-[calc(100vw-1.5rem)] items-center gap-2 rounded border border-emerald-200 bg-white px-3 py-2 text-xs font-medium text-zinc-900 shadow-sm dark:border-emerald-900/60 dark:bg-zinc-900 dark:text-zinc-100 sm:max-w-sm"
+        >
+          <FileDown size={14} className="shrink-0 text-emerald-600 dark:text-emerald-300" />
+          <span className="min-w-0 truncate">{toastMessage}</span>
+        </div>
+      ) : null}
     </main>
   );
 }
