@@ -3,7 +3,10 @@ use std::collections::HashSet;
 use crate::display_engine::models::{Display, Layout, Point};
 use crate::errors::AppError;
 
-pub fn validate_layout_for_displays(layout: &Layout, active_displays: &[Display]) -> Result<(), AppError> {
+pub fn validate_layout_for_displays(
+    layout: &Layout,
+    active_displays: &[Display],
+) -> Result<(), AppError> {
     let layout_ids = layout
         .displays
         .iter()
@@ -24,13 +27,20 @@ pub fn validate_layout_for_displays(layout: &Layout, active_displays: &[Display]
 }
 
 pub fn normalize_primary_to_origin(layout: &Layout) -> Layout {
-    let primary_id = layout
-        .primary_display_stable_id
-        .as_deref()
-        .or_else(|| layout.displays.first().map(|display| display.stable_id.as_str()));
+    let primary_id = layout.primary_display_stable_id.as_deref().or_else(|| {
+        layout
+            .displays
+            .first()
+            .map(|display| display.stable_id.as_str())
+    });
 
     let primary_position = primary_id
-        .and_then(|id| layout.displays.iter().find(|display| display.stable_id == id))
+        .and_then(|id| {
+            layout
+                .displays
+                .iter()
+                .find(|display| display.stable_id == id)
+        })
         .map(|display| display.position)
         .unwrap_or(Point { x: 0, y: 0 });
 

@@ -10,6 +10,7 @@ import {
   useNodesState,
 } from "@xyflow/react";
 import { Copy, Monitor, Moon, Plus, RefreshCcw, Save, Sun, Trash2, Zap } from "lucide-react";
+import { listen } from "@tauri-apps/api/event";
 import { clsx } from "clsx";
 import { useCanvasStore } from "../features/canvas/canvasStore";
 import {
@@ -20,6 +21,7 @@ import {
 } from "../features/canvas/layoutMath";
 import { useDisplayStore } from "../features/displays/displayStore";
 import { useProfileStore } from "../features/profiles/profileStore";
+import { ensureMenuBarIconVisible } from "../features/tray/trayVisibility";
 import { isTauriRuntime } from "../shared/runtime";
 import type { Display } from "../shared/types";
 
@@ -110,6 +112,16 @@ export function App() {
     document.documentElement.classList.toggle("dark", theme === "dark");
     window.localStorage.setItem("display-layout-manager.theme", theme);
   }, [theme]);
+
+  useEffect(() => {
+    if (!isNativeApp) {
+      return;
+    }
+
+    void ensureMenuBarIconVisible({ profiles, activeProfileId }).catch((error) => {
+      console.error("Failed to show menu bar icon", error);
+    });
+  }, [activeProfileId, isNativeApp, profiles]);
 
   const buildNodesForDisplays = useCallback(
     (displayList: Display[]) =>
@@ -248,7 +260,7 @@ export function App() {
     setDirty(false);
   };
 
-  const handleApplyLayout = async () => {
+  const handleApplyLayout = useCallback(async () => {
     if (displays.length === 0) {
       return;
     }
@@ -258,7 +270,39 @@ export function App() {
       setDirty(false);
       await refreshDisplays();
     }
-  };
+  }, [applyLayout, currentLayout, displays.length, refreshDisplays, setDirty]);
+
+  useEffect(() => {
+    if (!isNativeApp) {
+      return;
+    }
+
+    const unlistenRefresh = listen("tray:refresh-displays", () => {
+      void refreshDisplays();
+    });
+    const unlistenApply = listen("tray:apply-current-layout", () => {
+      void handleApplyLayout();
+    });
+    const unlistenApplyProfile = listen<{ profileId: string }>("tray:apply-profile", (event) => {
+      const profileId = event.payload.profileId;
+      if (!profileId) {
+        return;
+      }
+
+      void applyProfile(profileId).then(async (result) => {
+        if (result?.applied) {
+          setDirty(false);
+          await refreshDisplays();
+        }
+      });
+    });
+
+    return () => {
+      void unlistenRefresh.then((unlisten) => unlisten());
+      void unlistenApply.then((unlisten) => unlisten());
+      void unlistenApplyProfile.then((unlisten) => unlisten());
+    };
+  }, [applyProfile, handleApplyLayout, isNativeApp, refreshDisplays, setDirty]);
 
   return (
     <main className="grid h-screen grid-rows-[48px_minmax(0,1fr)] overflow-hidden bg-zinc-100 text-zinc-950 dark:bg-zinc-950 dark:text-zinc-100">

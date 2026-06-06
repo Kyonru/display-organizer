@@ -3,5 +3,17 @@
   "identifier": "default",
   "description": "Default permissions for the main application window",
   "windows": ["main"],
-  "permissions": ["core:default"]
+  "permissions": [
+    "core:default",
+    "core:tray:allow-get-by-id",
+    "core:tray:allow-new",
+    "core:tray:allow-set-icon",
+    "core:tray:allow-set-icon-as-template",
+    "core:tray:allow-set-icon-with-as-template",
+    "core:tray:allow-set-menu",
+    "core:tray:allow-set-show-menu-on-left-click",
+    "core:tray:allow-set-title",
+    "core:tray:allow-set-tooltip",
+    "core:tray:allow-set-visible"
+  ]
 }

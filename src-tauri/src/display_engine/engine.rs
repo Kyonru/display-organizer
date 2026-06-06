@@ -1,5 +1,7 @@
 use crate::display_engine::models::{ApplyLayoutResult, Display, Layout};
-use crate::display_engine::validation::{normalize_primary_to_origin, validate_layout_for_displays};
+use crate::display_engine::validation::{
+    normalize_primary_to_origin, validate_layout_for_displays,
+};
 use crate::errors::AppError;
 use crate::platform;
 

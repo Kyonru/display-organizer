@@ -147,10 +147,7 @@ pub struct ApplyLayoutResult {
 impl From<&Display> for LayoutDisplay {
     fn from(value: &Display) -> Self {
         Self {
-            stable_id: value
-                .stable_id
-                .clone()
-                .unwrap_or_else(|| value.id.clone()),
+            stable_id: value.stable_id.clone().unwrap_or_else(|| value.id.clone()),
             position: value.position,
             resolution: value.resolution,
             refresh_rate: value.refresh_rate,

@@ -62,7 +62,8 @@ extern "C" {
 pub fn query_displays() -> Result<Vec<Display>, AppError> {
     let mut ids = [0_u32; MAX_DISPLAYS];
     let mut count = 0_u32;
-    let error = unsafe { CGGetActiveDisplayList(MAX_DISPLAYS as u32, ids.as_mut_ptr(), &mut count) };
+    let error =
+        unsafe { CGGetActiveDisplayList(MAX_DISPLAYS as u32, ids.as_mut_ptr(), &mut count) };
     if error != CG_ERROR_SUCCESS {
         return Err(AppError::Display(format!(
             "CGGetActiveDisplayList failed with code {error}"
@@ -146,14 +147,12 @@ pub fn apply_layout(layout: &Layout, active_displays: &[Display]) -> Result<(), 
 
     let configure_result = (|| {
         for layout_display in layout.displays.iter().filter(|display| display.enabled) {
-            let display_id = display_ids
-                .get(&layout_display.stable_id)
-                .ok_or_else(|| {
-                    AppError::Validation(format!(
-                        "unable to map layout display {} to an active macOS display",
-                        layout_display.stable_id
-                    ))
-                })?;
+            let display_id = display_ids.get(&layout_display.stable_id).ok_or_else(|| {
+                AppError::Validation(format!(
+                    "unable to map layout display {} to an active macOS display",
+                    layout_display.stable_id
+                ))
+            })?;
             let error = unsafe {
                 CGConfigureDisplayOrigin(
                     config,
@@ -179,7 +178,8 @@ pub fn apply_layout(layout: &Layout, active_displays: &[Display]) -> Result<(), 
         return Err(error);
     }
 
-    let complete_error = unsafe { CGCompleteDisplayConfiguration(config, K_CG_CONFIGURE_PERMANENTLY) };
+    let complete_error =
+        unsafe { CGCompleteDisplayConfiguration(config, K_CG_CONFIGURE_PERMANENTLY) };
     if complete_error != CG_ERROR_SUCCESS {
         return Err(AppError::Display(format!(
             "CGCompleteDisplayConfiguration failed with code {complete_error}"

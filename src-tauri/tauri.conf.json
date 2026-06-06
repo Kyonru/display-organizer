@@ -19,6 +19,14 @@
         "minHeight": 640
       }
     ],
+    "trayIcon": {
+      "id": "display-layout-manager",
+      "iconPath": "icons/icon.png",
+      "iconAsTemplate": true,
+      "showMenuOnLeftClick": true,
+      "title": "",
+      "tooltip": "Display Layout Manager"
+    },
     "security": {
       "csp": null
     }
@@ -26,6 +34,12 @@
   "bundle": {
     "active": true,
     "targets": ["app"],
-    "icon": []
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ]
   }
 }

@@ -21,11 +21,11 @@ fn app_data_dir() -> Result<PathBuf, AppError> {
 
     #[cfg(not(test))]
     {
-    let dir = dirs::data_dir()
-        .ok_or_else(|| AppError::Storage("unable to resolve app data directory".to_string()))?
-        .join("Display Layout Manager");
-    fs::create_dir_all(&dir)?;
-    Ok(dir)
+        let dir = dirs::data_dir()
+            .ok_or_else(|| AppError::Storage("unable to resolve app data directory".to_string()))?
+            .join("Display Layout Manager");
+        fs::create_dir_all(&dir)?;
+        Ok(dir)
     }
 }
 
@@ -194,7 +194,8 @@ mod tests {
     };
 
     use super::{
-        delete_profile, duplicate_profile, get_profiles, rename_profile, save_profile, update_profile,
+        delete_profile, duplicate_profile, get_profiles, rename_profile, save_profile,
+        update_profile,
     };
 
     fn draft(name: &str) -> LayoutProfileDraft {
@@ -222,7 +223,8 @@ mod tests {
     #[test]
     fn profile_crud_round_trips_json() {
         let profile = save_profile(draft("Test Profile")).expect("save profile");
-        let renamed = rename_profile(profile.id.clone(), "Renamed".to_string()).expect("rename profile");
+        let renamed =
+            rename_profile(profile.id.clone(), "Renamed".to_string()).expect("rename profile");
         assert_eq!(renamed.name, "Renamed");
 
         let updated = update_profile(profile.id.clone(), draft("Updated")).expect("update profile");
