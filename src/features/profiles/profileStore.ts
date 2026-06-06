@@ -1,5 +1,11 @@
 import { create } from "zustand";
-import type { ApplyLayoutResult, Layout, LayoutProfile, LayoutProfileDraft } from "../../shared/types";
+import type {
+  ApplyLayoutResult,
+  Layout,
+  LayoutProfile,
+  LayoutProfileDraft,
+  ProfileApplyResult,
+} from "../../shared/types";
 import * as api from "./profileApi";
 
 type ProfileState = {
@@ -9,6 +15,7 @@ type ProfileState = {
   isApplying: boolean;
   error: string | null;
   lastApplyResult: ApplyLayoutResult | null;
+  lastProfileApplyResult: ProfileApplyResult | null;
   loadProfiles: () => Promise<void>;
   selectProfile: (id: string | null) => void;
   saveProfile: (draft: LayoutProfileDraft) => Promise<LayoutProfile | null>;
@@ -17,7 +24,8 @@ type ProfileState = {
   duplicateProfile: (id: string) => Promise<void>;
   deleteProfile: (id: string) => Promise<void>;
   applyLayout: (layout: Layout) => Promise<ApplyLayoutResult | null>;
-  applyProfile: (id: string) => Promise<ApplyLayoutResult | null>;
+  applyProfile: (id: string) => Promise<ProfileApplyResult | null>;
+  applyProfileDraft: (draft: LayoutProfileDraft) => Promise<ProfileApplyResult | null>;
 };
 
 function errorMessage(error: unknown): string {
@@ -31,6 +39,7 @@ export const useProfileStore = create<ProfileState>((set, get) => ({
   isApplying: false,
   error: null,
   lastApplyResult: null,
+  lastProfileApplyResult: null,
   loadProfiles: async () => {
     set({ isLoading: true, error: null });
     try {
@@ -100,7 +109,7 @@ export const useProfileStore = create<ProfileState>((set, get) => ({
     set({ isApplying: true, error: null });
     try {
       const result = await api.applyLayout(layout);
-      set({ isApplying: false, lastApplyResult: result });
+      set({ isApplying: false, lastApplyResult: result, lastProfileApplyResult: null });
       return result;
     } catch (error) {
       set({ isApplying: false, error: errorMessage(error) });
@@ -112,7 +121,26 @@ export const useProfileStore = create<ProfileState>((set, get) => ({
     try {
       const result = await api.applyProfile(id);
       await get().loadProfiles();
-      set({ isApplying: false, lastApplyResult: result });
+      set({
+        isApplying: false,
+        lastApplyResult: result.layoutResult,
+        lastProfileApplyResult: result,
+      });
+      return result;
+    } catch (error) {
+      set({ isApplying: false, error: errorMessage(error) });
+      return null;
+    }
+  },
+  applyProfileDraft: async (draft) => {
+    set({ isApplying: true, error: null });
+    try {
+      const result = await api.applyProfileDraft(draft);
+      set({
+        isApplying: false,
+        lastApplyResult: result.layoutResult,
+        lastProfileApplyResult: result,
+      });
       return result;
     } catch (error) {
       set({ isApplying: false, error: errorMessage(error) });

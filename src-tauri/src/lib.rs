@@ -4,10 +4,12 @@ mod display_engine;
 mod errors;
 mod persistence;
 mod platform;
+mod profile_actions;
 mod tray;
 
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             app_menu::setup(app)?;
             tray::setup(app)?;
@@ -32,6 +34,9 @@ pub fn run() {
             commands::delete_profile,
             commands::apply_layout,
             commands::apply_profile,
+            commands::apply_profile_draft,
+            commands::get_settings,
+            commands::save_settings,
             commands::get_automation_rules,
             commands::save_automation_rule,
             commands::delete_automation_rule,

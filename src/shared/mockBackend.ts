@@ -1,4 +1,5 @@
 import type {
+  AppSettings,
   ApplyLayoutResult,
   AutomationEvaluation,
   AutomationEvent,
@@ -10,6 +11,9 @@ import type {
   Layout,
   LayoutProfile,
   LayoutProfileDraft,
+  ProfileAction,
+  ProfileActionResult,
+  ProfileApplyResult,
   RecoveryState,
 } from "./types";
 
@@ -17,6 +21,7 @@ const PROFILE_STORAGE_KEY = "display-layout-manager.mock.profiles";
 const AUTOMATION_STORAGE_KEY = "display-layout-manager.mock.automationRules";
 const AUTOMATION_EVENTS_KEY = "display-layout-manager.mock.automationEvents";
 const RECOVERY_STORAGE_KEY = "display-layout-manager.mock.recovery";
+const SETTINGS_STORAGE_KEY = "display-layout-manager.mock.settings";
 
 export const mockDisplays: Display[] = [
   {
@@ -119,14 +124,55 @@ function readProfiles(): LayoutProfile[] {
   }
 
   try {
-    return JSON.parse(raw) as LayoutProfile[];
+    return (JSON.parse(raw) as LayoutProfile[]).map(normalizeProfile);
   } catch {
     return [];
   }
 }
 
 function writeProfiles(profiles: LayoutProfile[]) {
-  window.localStorage.setItem(PROFILE_STORAGE_KEY, JSON.stringify(profiles));
+  window.localStorage.setItem(PROFILE_STORAGE_KEY, JSON.stringify(profiles.map(normalizeProfile)));
+}
+
+function defaultSettings(): AppSettings {
+  return {
+    profileActions: {
+      scriptsEnabled: false,
+    },
+  };
+}
+
+function readSettings(): AppSettings {
+  const raw = window.localStorage.getItem(SETTINGS_STORAGE_KEY);
+  if (!raw) {
+    return defaultSettings();
+  }
+
+  try {
+    return { ...defaultSettings(), ...(JSON.parse(raw) as AppSettings) };
+  } catch {
+    return defaultSettings();
+  }
+}
+
+function writeSettings(settings: AppSettings) {
+  window.localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(settings));
+}
+
+function normalizeProfile(profile: LayoutProfile): LayoutProfile {
+  return {
+    ...profile,
+    actions: (profile.actions ?? []).map(normalizeAction),
+  };
+}
+
+function normalizeAction(action: ProfileAction): ProfileAction {
+  return {
+    ...action,
+    id: action.id ?? id(),
+    enabled: action.enabled ?? true,
+    conditions: action.conditions ?? null,
+  } as ProfileAction;
 }
 
 function readAutomationRules(): AutomationRule[] {
@@ -188,6 +234,15 @@ export function getMockProfiles(): Promise<LayoutProfile[]> {
   return Promise.resolve(readProfiles());
 }
 
+export function getMockSettings(): Promise<AppSettings> {
+  return Promise.resolve(readSettings());
+}
+
+export function saveMockSettings(settings: AppSettings): Promise<AppSettings> {
+  writeSettings(settings);
+  return Promise.resolve(settings);
+}
+
 export function saveMockProfile(draft: LayoutProfileDraft): Promise<LayoutProfile> {
   const timestamp = now();
   const profile: LayoutProfile = {
@@ -195,6 +250,7 @@ export function saveMockProfile(draft: LayoutProfileDraft): Promise<LayoutProfil
     name: draft.name,
     description: draft.description ?? null,
     layout: draft.layout,
+    actions: (draft.actions ?? []).map(normalizeAction),
     detectionRules: [],
     hotkey: null,
     createdAt: timestamp,
@@ -219,6 +275,7 @@ export function updateMockProfile(profileId: string, draft: LayoutProfileDraft):
   profile.name = draft.name;
   profile.description = draft.description ?? null;
   profile.layout = draft.layout;
+  profile.actions = (draft.actions ?? []).map(normalizeAction);
   profile.updatedAt = now();
   writeProfiles(profiles);
   return Promise.resolve(profile);
@@ -308,7 +365,135 @@ export function applyMockLayout(layout: Layout): Promise<ApplyLayoutResult> {
   });
 }
 
-export function applyMockProfile(profileId: string): Promise<ApplyLayoutResult> {
+function actionDisplayIds() {
+  return new Set(mockDisplays.map((display) => display.stableId ?? display.id));
+}
+
+function actionConditionSkipMessage(action: ProfileAction) {
+  const conditions = action.conditions;
+  if (!conditions) {
+    return null;
+  }
+
+  if (conditions.platform && conditions.platform !== "macos") {
+    return `Skipped because this action only runs on ${conditions.platform}.`;
+  }
+
+  if (conditions.displayCount !== null && conditions.displayCount !== undefined && conditions.displayCount !== mockDisplays.length) {
+    return `Skipped because ${mockDisplays.length} displays are connected, expected ${conditions.displayCount}.`;
+  }
+
+  if (conditions.displayStableId && !actionDisplayIds().has(conditions.displayStableId)) {
+    return `Skipped because display ${conditions.displayStableId} is not connected.`;
+  }
+
+  return null;
+}
+
+function actionMessage(action: ProfileAction) {
+  if (action.type === "open_app") {
+    if (isUrlTarget(action.appPath)) {
+      return "Preview opened URL.";
+    }
+
+    const name = action.appPath.split("/").pop()?.replace(/\.app$/i, "") || action.appPath;
+    return `Preview opened ${name}.`;
+  }
+
+  if (action.type === "close_app") {
+    return `Preview requested ${action.appName} to quit.`;
+  }
+
+  return "Preview script completed.";
+}
+
+function actionError(action: ProfileAction, settings: AppSettings) {
+  if (action.type === "run_script" && !settings.profileActions.scriptsEnabled) {
+    return {
+      status: "skipped" as const,
+      message: "Scripts are disabled. Enable advanced profile scripts in Settings to run this action.",
+    };
+  }
+
+  if (action.type === "open_app" && !action.appPath.trim()) {
+    return { status: "error" as const, message: "App path is required." };
+  }
+
+  if (action.type === "open_app" && isUrlTarget(action.appPath) && (action.args?.length ?? 0) > 0) {
+    return { status: "error" as const, message: "Arguments require a local macOS .app bundle, not a URL." };
+  }
+
+  if (action.type === "open_app" && isUrlTarget(action.appPath) && action.position) {
+    return { status: "error" as const, message: "Window placement requires a local macOS .app bundle, not a URL." };
+  }
+
+  if (action.type === "close_app" && !action.appName.trim()) {
+    return { status: "error" as const, message: "App name is required." };
+  }
+
+  if (action.type === "run_script" && !action.command.trim()) {
+    return { status: "error" as const, message: "Script command is required." };
+  }
+
+  if (action.type === "open_app" && action.position && (action.position.width <= 0 || action.position.height <= 0)) {
+    return { status: "error" as const, message: "Window placement width and height must be greater than zero." };
+  }
+
+  if (action.type === "open_app" && action.monitorId && !actionDisplayIds().has(action.monitorId)) {
+    return { status: "error" as const, message: `Monitor ${action.monitorId} is not connected.` };
+  }
+
+  return null;
+}
+
+function isUrlTarget(value: string) {
+  return value.startsWith("https://") || value.startsWith("http://") || value.startsWith("macappstore://");
+}
+
+function simulateActionResults(actions: ProfileAction[]): ProfileActionResult[] {
+  const settings = readSettings();
+  return actions.map((action, index) => {
+    const timestamp = now();
+    const normalized = normalizeAction(action);
+    const skipped = normalized.enabled === false ? "Action is disabled." : actionConditionSkipMessage(normalized);
+    const error = skipped ? null : actionError(normalized, settings);
+    const status = skipped ? "skipped" : error?.status ?? "applied";
+    const message = skipped ?? error?.message ?? actionMessage(normalized);
+
+    return {
+      actionId: normalized.id ?? `action-${index + 1}`,
+      actionType: normalized.type,
+      status,
+      message,
+      startedAt: timestamp,
+      completedAt: timestamp,
+    };
+  });
+}
+
+function profileApplyMessage(layoutResult: ApplyLayoutResult, actionResults: ProfileActionResult[]) {
+  if (actionResults.length === 0) {
+    return layoutResult.message;
+  }
+
+  const applied = actionResults.filter((result) => result.status === "applied").length;
+  const skipped = actionResults.filter((result) => result.status === "skipped").length;
+  const errors = actionResults.filter((result) => result.status === "error").length;
+  return `${layoutResult.message} Actions: ${applied} applied, ${skipped} skipped, ${errors} failed.`;
+}
+
+export async function applyMockProfileDraft(draft: LayoutProfileDraft): Promise<ProfileApplyResult> {
+  const layoutResult = await applyMockLayout(draft.layout);
+  const actionResults = simulateActionResults(draft.actions ?? []);
+  return {
+    applied: layoutResult.applied,
+    message: profileApplyMessage(layoutResult, actionResults),
+    layoutResult,
+    actionResults,
+  };
+}
+
+export async function applyMockProfile(profileId: string): Promise<ProfileApplyResult> {
   const profiles = readProfiles();
   const profile = profiles.find((item) => item.id === profileId);
   if (!profile) {
@@ -318,7 +503,12 @@ export function applyMockProfile(profileId: string): Promise<ApplyLayoutResult> 
   profile.lastAppliedAt = now();
   profile.updatedAt = now();
   writeProfiles(profiles);
-  return applyMockLayout(profile.layout);
+  return applyMockProfileDraft({
+    name: profile.name,
+    description: profile.description,
+    layout: profile.layout,
+    actions: profile.actions,
+  });
 }
 
 export function getMockAutomationRules(): Promise<AutomationRule[]> {
@@ -445,6 +635,7 @@ export function exportMockDiagnostics(): Promise<DiagnosticsBundle> {
     appVersion: "0.1.0-preview",
     generatedAt: now(),
     platform: "macos",
+    settings: readSettings(),
     displays: mockDisplays.map((display) => ({
       stableIdHash: `mock-${display.stableId ?? display.id}`,
       name: display.name,
@@ -461,6 +652,18 @@ export function exportMockDiagnostics(): Promise<DiagnosticsBundle> {
       id: profile.id,
       name: profile.name,
       displayCount: profile.layout.displays.length,
+      actionCount: profile.actions.length,
+      actionTypes: profile.actions.map((action) => action.type),
+      actionAppNames: profile.actions
+        .flatMap((action) =>
+          action.type === "open_app"
+            ? [action.appPath.split("/").pop()?.replace(/\.app$/i, "") ?? action.appPath]
+            : action.type === "close_app"
+              ? [action.appName]
+              : [],
+        )
+        .filter(Boolean),
+      hasScripts: profile.actions.some((action) => action.type === "run_script"),
       updatedAt: profile.updatedAt,
       lastAppliedAt: profile.lastAppliedAt ?? null,
     })),

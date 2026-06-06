@@ -8,6 +8,7 @@ use crate::display_engine::models::{
     Layout, LayoutProfile, LayoutProfileDraft, PlatformName, ProfileMetadata,
 };
 use crate::errors::AppError;
+use crate::profile_actions::normalize_profile_actions;
 
 const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -65,6 +66,7 @@ pub fn save_profile(draft: LayoutProfileDraft) -> Result<LayoutProfile, AppError
         name: draft.name.trim().to_string(),
         description: draft.description,
         layout: draft.layout,
+        actions: normalize_profile_actions(draft.actions),
         detection_rules: Vec::new(),
         hotkey: None,
         created_at: now.clone(),
@@ -101,6 +103,7 @@ pub fn update_profile(id: String, draft: LayoutProfileDraft) -> Result<LayoutPro
     profile.name = trimmed.to_string();
     profile.description = draft.description;
     profile.layout = draft.layout;
+    profile.actions = normalize_profile_actions(draft.actions);
     profile.updated_at = Utc::now().to_rfc3339();
     let updated = profile.clone();
     write_profiles(&profiles)?;
@@ -183,7 +186,7 @@ pub fn save_last_known_good(layout: &Layout) -> Result<(), AppError> {
 #[cfg(test)]
 mod tests {
     use crate::display_engine::models::{
-        DisplayRotation, Layout, LayoutDisplay, LayoutProfileDraft, Point, Size,
+        DisplayRotation, Layout, LayoutDisplay, LayoutProfileDraft, Point, ProfileAction, Size,
     };
 
     use super::{
@@ -211,12 +214,20 @@ mod tests {
                 }],
                 primary_display_stable_id: Some("display-a".to_string()),
             },
+            actions: vec![ProfileAction::CloseApp {
+                id: None,
+                enabled: true,
+                conditions: None,
+                app_name: "Preview".to_string(),
+            }],
         }
     }
 
     #[test]
     fn profile_crud_round_trips_json() {
         let profile = save_profile(draft("Test Profile")).expect("save profile");
+        assert_eq!(profile.actions.len(), 1);
+        assert!(profile.actions[0].id().is_some());
         let renamed =
             rename_profile(profile.id.clone(), "Renamed".to_string()).expect("rename profile");
         assert_eq!(renamed.name, "Renamed");

@@ -10,10 +10,11 @@ use crate::display_engine::automation::current_platform;
 use crate::display_engine::models::{
     ApplyLayoutResult, AutomationEvent, AutomationEventType, AutomationRule, AutomationRuleDraft,
     DiagnosticsBundle, DiagnosticsDisplaySnapshot, DiagnosticsProfileSummary, Display,
-    LayoutProfile, RecoveryState,
+    LayoutProfile, ProfileAction, RecoveryState,
 };
 use crate::errors::AppError;
 use crate::persistence::profile_repository;
+use crate::persistence::settings_repository;
 
 const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
 const MAX_EVENTS: usize = 50;
@@ -200,11 +201,13 @@ pub fn export_diagnostics(
     let automation_rules = get_automation_rules()?;
     let recent_events = get_automation_events()?;
     let recovery_state = get_recovery_state()?;
+    let settings = settings_repository::get_settings().unwrap_or_default();
 
     Ok(DiagnosticsBundle {
         app_version: APP_VERSION.to_string(),
         generated_at: Utc::now().to_rfc3339(),
         platform: current_platform(),
+        settings,
         displays: displays.into_iter().map(redact_display).collect(),
         profiles: profiles
             .into_iter()
@@ -212,6 +215,17 @@ pub fn export_diagnostics(
                 id: profile.id,
                 name: profile.name,
                 display_count: profile.layout.displays.len(),
+                action_count: profile.actions.len(),
+                action_types: profile
+                    .actions
+                    .iter()
+                    .map(ProfileAction::action_type)
+                    .collect(),
+                action_app_names: profile.actions.iter().filter_map(action_app_name).collect(),
+                has_scripts: profile
+                    .actions
+                    .iter()
+                    .any(|action| matches!(action, ProfileAction::RunScript { .. })),
                 updated_at: profile.updated_at,
                 last_applied_at: profile.last_applied_at,
             })
@@ -241,6 +255,17 @@ fn hash_id(value: &str) -> String {
     let mut hasher = DefaultHasher::new();
     value.hash(&mut hasher);
     format!("{:016x}", hasher.finish())
+}
+
+fn action_app_name(action: &ProfileAction) -> Option<String> {
+    match action {
+        ProfileAction::OpenApp { app_path, .. } => std::path::Path::new(app_path)
+            .file_stem()
+            .and_then(|name| name.to_str())
+            .map(str::to_string),
+        ProfileAction::CloseApp { app_name, .. } => Some(app_name.clone()),
+        ProfileAction::RunScript { .. } => None,
+    }
 }
 
 #[cfg(test)]

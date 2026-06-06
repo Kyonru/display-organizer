@@ -7,11 +7,12 @@
 The application will provide an operating-system-style monitor arrangement canvas, but extend it with advanced features:
 
 - Named layout profiles
+- Profile Actions for workspace setup
 - Automatic setup detection
 - Hotkeys
 - Tray/menu bar controls
 - Import/export
-- Future automation and workspace management
+- Automation and workspace management
 
 Recommended stack:
 
@@ -106,6 +107,7 @@ src/
       components/
       profileStore.ts
       profileApi.ts
+      profileActions.ts
 
     hotkeys/
       components/
@@ -132,6 +134,7 @@ The frontend should handle:
 - Visual monitor arrangement
 - Drag, pan, zoom, selection, and snapping
 - Profile CRUD
+- Profile Actions editing and apply results
 - Displaying detected monitor metadata
 - User confirmation flows
 - Settings and automation preferences
@@ -152,6 +155,7 @@ The Rust side should be responsible for:
 - Detecting monitor changes
 - Matching current setups to saved profiles
 - Persisting profiles and settings
+- Executing Profile Actions after successful profile layout apply
 - Registering global hotkeys
 - Managing tray/menu bar behavior
 - Emitting events to the frontend
@@ -188,7 +192,10 @@ async fn get_profiles() -> Result<Vec<LayoutProfile>, AppError>;
 async fn save_profile(profile: LayoutProfileDraft) -> Result<LayoutProfile, AppError>;
 
 #[tauri::command]
-async fn apply_profile(profile_id: String) -> Result<ApplyLayoutResult, AppError>;
+async fn apply_profile(profile_id: String) -> Result<ProfileApplyResult, AppError>;
+
+#[tauri::command]
+async fn apply_profile_draft(profile: LayoutProfileDraft) -> Result<ProfileApplyResult, AppError>;
 
 #[tauri::command]
 async fn export_profiles(profile_ids: Vec<String>) -> Result<String, AppError>;
@@ -442,6 +449,8 @@ display-layout-manager/
         capabilities.rs
         errors.rs
 
+      profile_actions.rs
+
       platform/
         mod.rs
 
@@ -602,6 +611,8 @@ type LayoutProfile = {
 
   layout: Layout;
 
+  actions: ProfileAction[];
+
   detectionRules: DetectionRule[];
 
   hotkey?: string;
@@ -616,6 +627,46 @@ type LayoutProfile = {
   };
 };
 ```
+
+Profile Actions turn a display profile into a workspace profile:
+
+```ts
+type ProfileAction =
+  | {
+      id?: string;
+      enabled?: boolean;
+      conditions?: ProfileActionConditions;
+      type: "open_app";
+      appPath: string;
+      args?: string[];
+      delayMs?: number;
+      monitorId?: string;
+      position?: { x: number; y: number; width: number; height: number };
+    }
+  | {
+      id?: string;
+      enabled?: boolean;
+      conditions?: ProfileActionConditions;
+      type: "close_app";
+      appName: string;
+    }
+  | {
+      id?: string;
+      enabled?: boolean;
+      conditions?: ProfileActionConditions;
+      type: "run_script";
+      command: string;
+      delayMs?: number;
+    };
+
+type ProfileActionConditions = {
+  platform?: "macos" | "windows" | "linux";
+  displayStableId?: string;
+  displayCount?: number;
+};
+```
+
+Actions run only after a successful profile layout apply. Manual layout apply remains layout-only. Scripts are disabled by default and must be explicitly enabled as an advanced setting. Window placement may require macOS Accessibility permission.
 
 ---
 
@@ -672,6 +723,7 @@ profiles (
   name TEXT NOT NULL,
   description TEXT,
   layout_json TEXT NOT NULL,
+  actions_json TEXT NOT NULL,
   detection_rules_json TEXT NOT NULL,
   hotkey TEXT,
   created_at TEXT NOT NULL,
@@ -695,6 +747,8 @@ display_history (
   metadata_json TEXT
 );
 ```
+
+Profile Action settings should include `profileActions.scriptsEnabled`, defaulting to `false`. Diagnostics should export action counts, action types, and app basenames, but not raw script commands.
 
 Import/export format:
 
@@ -1023,6 +1077,7 @@ Features:
 - Add description
 - Assign hotkey
 - Configure auto-switch rules
+- Configure Profile Actions
 - Show profile compatibility with current setup
 
 Profile detail view:
@@ -1033,6 +1088,7 @@ Description
 Displays included
 Primary display
 Detection rules
+Profile Actions
 Hotkey
 Last applied
 Apply button
@@ -1123,6 +1179,7 @@ Scope:
 - Save local profiles
 - Apply layouts on one primary platform first
 - Basic profile CRUD
+- macOS Profile Actions for opening apps, closing apps, scripts, and window placement
 - Manual refresh
 - Basic settings
 
@@ -1170,6 +1227,7 @@ Alpha success criteria:
 - Tray quick switching works
 - Scale, rotation, and primary controls are visible in the inspector and enabled only when the active platform adapter reports apply support
 - Saved profiles preserve scale mode, rotation, and primary display settings where supported
+- Saved profiles preserve workspace actions and report applied/skipped/error action results
 
 ---
 
@@ -1187,6 +1245,7 @@ Scope:
 - Linux XRandR hardening
 - Improved Windows monitor identity
 - macOS display mode validation
+- Profile Action safety, diagnostics redaction, and cross-platform executor hardening
 - Diagnostics export
 
 Beta success criteria:

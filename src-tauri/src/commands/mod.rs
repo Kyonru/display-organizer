@@ -1,13 +1,15 @@
 use crate::display_engine::automation;
 use crate::display_engine::engine;
 use crate::display_engine::models::{
-    ApplyLayoutResult, AutomationEvaluation, AutomationEvent, AutomationEventType, AutomationRule,
-    AutomationRuleDraft, DiagnosticsBundle, Display, Layout, LayoutProfile, LayoutProfileDraft,
-    RecoveryState,
+    AppSettings, ApplyLayoutResult, AutomationEvaluation, AutomationEvent, AutomationEventType,
+    AutomationRule, AutomationRuleDraft, DiagnosticsBundle, Display, Layout, LayoutProfile,
+    LayoutProfileDraft, ProfileActionStatus, ProfileApplyResult, RecoveryState,
 };
 use crate::errors::AppError;
 use crate::persistence::beta_repository;
 use crate::persistence::profile_repository;
+use crate::persistence::settings_repository;
+use crate::profile_actions;
 
 #[tauri::command]
 pub fn get_displays() -> Result<Vec<Display>, AppError> {
@@ -62,13 +64,80 @@ pub fn apply_layout(layout: Layout) -> Result<ApplyLayoutResult, AppError> {
 }
 
 #[tauri::command]
-pub fn apply_profile(profile_id: String) -> Result<ApplyLayoutResult, AppError> {
+pub fn apply_profile(profile_id: String) -> Result<ProfileApplyResult, AppError> {
     let profile = profile_repository::get_profile(&profile_id)?;
-    let result = apply_layout(profile.layout)?;
+    let draft = LayoutProfileDraft {
+        name: profile.name,
+        description: profile.description,
+        layout: profile.layout,
+        actions: profile.actions,
+    };
+    let result = apply_profile_draft_internal(draft)?;
     if result.applied {
         profile_repository::mark_profile_applied(&profile_id)?;
     }
     Ok(result)
+}
+
+#[tauri::command]
+pub fn apply_profile_draft(draft: LayoutProfileDraft) -> Result<ProfileApplyResult, AppError> {
+    apply_profile_draft_internal(draft)
+}
+
+fn apply_profile_draft_internal(draft: LayoutProfileDraft) -> Result<ProfileApplyResult, AppError> {
+    let layout_result = apply_layout(draft.layout)?;
+    let settings = settings_repository::get_settings().unwrap_or_default();
+    let active_displays = engine::get_displays().unwrap_or_default();
+    let action_results = if layout_result.applied {
+        profile_actions::execute_profile_actions(&draft.actions, &active_displays, &settings)
+    } else {
+        Vec::new()
+    };
+    let message = profile_apply_message(&layout_result, &action_results);
+
+    Ok(ProfileApplyResult {
+        applied: layout_result.applied,
+        message,
+        layout_result,
+        action_results,
+    })
+}
+
+fn profile_apply_message(
+    layout_result: &ApplyLayoutResult,
+    action_results: &[crate::display_engine::models::ProfileActionResult],
+) -> String {
+    if action_results.is_empty() {
+        return layout_result.message.clone();
+    }
+
+    let applied = action_results
+        .iter()
+        .filter(|result| matches!(result.status, ProfileActionStatus::Applied))
+        .count();
+    let skipped = action_results
+        .iter()
+        .filter(|result| matches!(result.status, ProfileActionStatus::Skipped))
+        .count();
+    let errors = action_results
+        .iter()
+        .filter(|result| matches!(result.status, ProfileActionStatus::Error))
+        .count();
+
+    format!(
+        "{} Actions: {applied} applied, {skipped} skipped, {errors} failed.",
+        layout_result.message
+    )
+}
+
+#[tauri::command]
+pub fn get_settings() -> Result<AppSettings, AppError> {
+    settings_repository::get_settings()
+}
+
+#[tauri::command]
+pub fn save_settings(settings: AppSettings) -> Result<AppSettings, AppError> {
+    settings_repository::save_settings(settings)
 }
 
 #[tauri::command]

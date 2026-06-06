@@ -79,11 +79,62 @@ export type Layout = {
   primaryDisplayStableId: string | null;
 };
 
+export type PlatformName = "macos" | "windows" | "linux";
+
+export type ProfileActionConditions = {
+  platform?: PlatformName | null;
+  displayStableId?: string | null;
+  displayCount?: number | null;
+};
+
+export type ProfileActionBase = {
+  id?: string | null;
+  enabled?: boolean;
+  conditions?: ProfileActionConditions | null;
+};
+
+export type ProfileAction =
+  | (ProfileActionBase & {
+      type: "open_app";
+      appPath: string;
+      args?: string[];
+      delayMs?: number | null;
+      monitorId?: string | null;
+      position?: Rect | null;
+    })
+  | (ProfileActionBase & {
+      type: "close_app";
+      appName: string;
+    })
+  | (ProfileActionBase & {
+      type: "run_script";
+      command: string;
+      delayMs?: number | null;
+    });
+
+export type ProfileActionType = ProfileAction["type"];
+
+export type ProfileActionResult = {
+  actionId: string;
+  actionType: ProfileActionType;
+  status: "applied" | "skipped" | "error";
+  message: string;
+  startedAt: string;
+  completedAt: string;
+};
+
+export type AppSettings = {
+  profileActions: {
+    scriptsEnabled: boolean;
+  };
+};
+
 export type LayoutProfile = {
   id: string;
   name: string;
   description?: string | null;
   layout: Layout;
+  actions: ProfileAction[];
   detectionRules: unknown[];
   hotkey?: string | null;
   createdAt: string;
@@ -99,6 +150,7 @@ export type LayoutProfileDraft = {
   name: string;
   description?: string | null;
   layout: Layout;
+  actions?: ProfileAction[];
 };
 
 export type AutomationRuleMatch = {
@@ -107,7 +159,7 @@ export type AutomationRuleMatch = {
   requireInternal: boolean | null;
   requireExternal: boolean | null;
   dockSignature: string | null;
-  platform: "macos" | "windows" | "linux" | null;
+  platform: PlatformName | null;
 };
 
 export type AutomationRule = {
@@ -173,6 +225,13 @@ export type ApplyDisplayChangeResult = {
   };
 };
 
+export type ProfileApplyResult = {
+  applied: boolean;
+  message: string;
+  layoutResult: ApplyLayoutResult;
+  actionResults: ProfileActionResult[];
+};
+
 export type RecoveryState = {
   id: string;
   previousLayout: Layout;
@@ -187,6 +246,10 @@ export type DiagnosticsProfileSummary = {
   id: string;
   name: string;
   displayCount: number;
+  actionCount: number;
+  actionTypes: ProfileActionType[];
+  actionAppNames: string[];
+  hasScripts: boolean;
   updatedAt: string;
   lastAppliedAt: string | null;
 };
@@ -207,7 +270,8 @@ export type DiagnosticsDisplaySnapshot = {
 export type DiagnosticsBundle = {
   appVersion: string;
   generatedAt: string;
-  platform: "macos" | "windows" | "linux";
+  platform: PlatformName;
+  settings: AppSettings;
   displays: DiagnosticsDisplaySnapshot[];
   profiles: DiagnosticsProfileSummary[];
   automationRules: AutomationRule[];

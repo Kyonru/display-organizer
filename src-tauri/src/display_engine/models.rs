@@ -235,6 +235,8 @@ pub struct LayoutProfile {
     pub name: String,
     pub description: Option<String>,
     pub layout: Layout,
+    #[serde(default)]
+    pub actions: Vec<ProfileAction>,
     pub detection_rules: Vec<serde_json::Value>,
     pub hotkey: Option<String>,
     pub created_at: String,
@@ -256,6 +258,174 @@ pub enum PlatformName {
     Macos,
     Windows,
     Linux,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ProfileActionConditions {
+    #[serde(default)]
+    pub platform: Option<PlatformName>,
+    #[serde(default)]
+    pub display_stable_id: Option<String>,
+    #[serde(default)]
+    pub display_count: Option<usize>,
+}
+
+fn action_enabled_default() -> bool {
+    true
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ProfileAction {
+    OpenApp {
+        #[serde(default)]
+        id: Option<String>,
+        #[serde(default = "action_enabled_default")]
+        enabled: bool,
+        #[serde(default)]
+        conditions: Option<ProfileActionConditions>,
+        #[serde(rename = "appPath", alias = "app_path")]
+        app_path: String,
+        #[serde(default)]
+        args: Vec<String>,
+        #[serde(default, rename = "delayMs", alias = "delay_ms")]
+        delay_ms: Option<u64>,
+        #[serde(default, rename = "monitorId", alias = "monitor_id")]
+        monitor_id: Option<String>,
+        #[serde(default)]
+        position: Option<Rect>,
+    },
+    CloseApp {
+        #[serde(default)]
+        id: Option<String>,
+        #[serde(default = "action_enabled_default")]
+        enabled: bool,
+        #[serde(default)]
+        conditions: Option<ProfileActionConditions>,
+        #[serde(rename = "appName", alias = "app_name")]
+        app_name: String,
+    },
+    RunScript {
+        #[serde(default)]
+        id: Option<String>,
+        #[serde(default = "action_enabled_default")]
+        enabled: bool,
+        #[serde(default)]
+        conditions: Option<ProfileActionConditions>,
+        command: String,
+        #[serde(default, rename = "delayMs", alias = "delay_ms")]
+        delay_ms: Option<u64>,
+    },
+}
+
+impl ProfileAction {
+    pub fn id(&self) -> Option<&str> {
+        match self {
+            Self::OpenApp { id, .. } | Self::CloseApp { id, .. } | Self::RunScript { id, .. } => {
+                id.as_deref()
+            }
+        }
+    }
+
+    pub fn set_id(&mut self, next_id: String) {
+        match self {
+            Self::OpenApp { id, .. } | Self::CloseApp { id, .. } | Self::RunScript { id, .. } => {
+                *id = Some(next_id);
+            }
+        }
+    }
+
+    pub fn enabled(&self) -> bool {
+        match self {
+            Self::OpenApp { enabled, .. }
+            | Self::CloseApp { enabled, .. }
+            | Self::RunScript { enabled, .. } => *enabled,
+        }
+    }
+
+    pub fn conditions(&self) -> Option<&ProfileActionConditions> {
+        match self {
+            Self::OpenApp { conditions, .. }
+            | Self::CloseApp { conditions, .. }
+            | Self::RunScript { conditions, .. } => conditions.as_ref(),
+        }
+    }
+
+    pub fn delay_ms(&self) -> u64 {
+        match self {
+            Self::OpenApp { delay_ms, .. } | Self::RunScript { delay_ms, .. } => {
+                delay_ms.unwrap_or(0)
+            }
+            Self::CloseApp { .. } => 0,
+        }
+    }
+
+    pub fn action_type(&self) -> ProfileActionType {
+        match self {
+            Self::OpenApp { .. } => ProfileActionType::OpenApp,
+            Self::CloseApp { .. } => ProfileActionType::CloseApp,
+            Self::RunScript { .. } => ProfileActionType::RunScript,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum ProfileActionType {
+    OpenApp,
+    CloseApp,
+    RunScript,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub enum ProfileActionStatus {
+    Applied,
+    Skipped,
+    Error,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ProfileActionResult {
+    pub action_id: String,
+    pub action_type: ProfileActionType,
+    pub status: ProfileActionStatus,
+    pub message: String,
+    pub started_at: String,
+    pub completed_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ProfileApplyResult {
+    pub applied: bool,
+    pub message: String,
+    pub layout_result: ApplyLayoutResult,
+    #[serde(default)]
+    pub action_results: Vec<ProfileActionResult>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ProfileActionSettings {
+    pub scripts_enabled: bool,
+}
+
+impl Default for ProfileActionSettings {
+    fn default() -> Self {
+        Self {
+            scripts_enabled: false,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct AppSettings {
+    #[serde(default)]
+    pub profile_actions: ProfileActionSettings,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -357,6 +527,14 @@ pub struct DiagnosticsProfileSummary {
     pub id: String,
     pub name: String,
     pub display_count: usize,
+    #[serde(default)]
+    pub action_count: usize,
+    #[serde(default)]
+    pub action_types: Vec<ProfileActionType>,
+    #[serde(default)]
+    pub action_app_names: Vec<String>,
+    #[serde(default)]
+    pub has_scripts: bool,
     pub updated_at: String,
     pub last_applied_at: Option<String>,
 }
@@ -382,6 +560,7 @@ pub struct DiagnosticsBundle {
     pub app_version: String,
     pub generated_at: String,
     pub platform: PlatformName,
+    pub settings: AppSettings,
     pub displays: Vec<DiagnosticsDisplaySnapshot>,
     pub profiles: Vec<DiagnosticsProfileSummary>,
     pub automation_rules: Vec<AutomationRule>,
@@ -395,6 +574,8 @@ pub struct LayoutProfileDraft {
     pub name: String,
     pub description: Option<String>,
     pub layout: Layout,
+    #[serde(default)]
+    pub actions: Vec<ProfileAction>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -475,7 +656,7 @@ impl From<&[Display]> for Layout {
 
 #[cfg(test)]
 mod tests {
-    use super::DisplayRotation;
+    use super::{DisplayRotation, LayoutProfile, ProfileAction};
 
     #[test]
     fn display_rotation_accepts_numeric_json() {
@@ -496,5 +677,72 @@ mod tests {
         let value = serde_json::to_string(&DisplayRotation::Deg180).unwrap();
 
         assert_eq!(value, "180");
+    }
+
+    #[test]
+    fn profile_actions_default_for_older_profiles() {
+        let profile = serde_json::from_str::<LayoutProfile>(
+            r#"{
+              "id": "profile-a",
+              "name": "Desk",
+              "description": null,
+              "layout": { "displays": [], "primaryDisplayStableId": null },
+              "detectionRules": [],
+              "hotkey": null,
+              "createdAt": "now",
+              "updatedAt": "now",
+              "lastAppliedAt": null,
+              "metadata": { "appVersion": "test", "platformCreatedOn": "macos" }
+            }"#,
+        )
+        .unwrap();
+
+        assert!(profile.actions.is_empty());
+    }
+
+    #[test]
+    fn profile_action_accepts_frontend_camel_case_fields() {
+        let action = serde_json::from_str::<ProfileAction>(
+            r#"{
+              "type": "open_app",
+              "id": "action-a",
+              "enabled": true,
+              "appPath": "/Applications/Slack.app",
+              "args": ["--reuse-window"],
+              "delayMs": 1000,
+              "monitorId": "macos-cg-2",
+              "position": { "x": 10, "y": 20, "width": 800, "height": 600 }
+            }"#,
+        )
+        .unwrap();
+
+        let ProfileAction::OpenApp {
+            app_path,
+            delay_ms,
+            monitor_id,
+            ..
+        } = action
+        else {
+            panic!("expected open app action");
+        };
+
+        assert_eq!(app_path, "/Applications/Slack.app");
+        assert_eq!(delay_ms, Some(1000));
+        assert_eq!(monitor_id.as_deref(), Some("macos-cg-2"));
+    }
+
+    #[test]
+    fn profile_action_serializes_frontend_camel_case_fields() {
+        let action = ProfileAction::CloseApp {
+            id: Some("action-a".to_string()),
+            enabled: true,
+            conditions: None,
+            app_name: "Preview".to_string(),
+        };
+
+        let value = serde_json::to_value(action).unwrap();
+
+        assert_eq!(value["appName"], "Preview");
+        assert!(value.get("app_name").is_none());
     }
 }

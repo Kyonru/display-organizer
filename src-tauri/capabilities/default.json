@@ -2,7 +2,9 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
   "description": "Default permissions for the main application window",
-  "windows": ["main"],
+  "windows": [
+    "main"
+  ],
   "permissions": [
     "core:default",
     "core:tray:allow-get-by-id",
@@ -14,6 +16,8 @@
     "core:tray:allow-set-show-menu-on-left-click",
     "core:tray:allow-set-title",
     "core:tray:allow-set-tooltip",
-    "core:tray:allow-set-visible"
+    "core:tray:allow-set-visible",
+    "dialog:default",
+    "dialog:allow-open"
   ]
 }

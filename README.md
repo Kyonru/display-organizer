@@ -1,6 +1,6 @@
 # Display Layout Manager
 
-Display Layout Manager is a desktop tool for arranging multiple monitors visually and applying saved display layouts to the operating system.
+Display Layout Manager is a desktop tool for arranging multiple monitors visually, applying saved display layouts to the operating system, and launching workspace actions attached to those profiles.
 
 The current implementation is a Tauri v2 desktop app with a React, TypeScript, Zustand, React Flow, Tailwind frontend and a Rust display engine. The working native target is macOS. Windows and Linux X11 support are part of the planned Alpha/Beta architecture in `PLAN.md`, but native adapters for those platforms are not complete in this repo yet.
 
@@ -11,6 +11,7 @@ The current implementation is a Tauri v2 desktop app with a React, TypeScript, Z
 | macOS display detection | Implemented |
 | Visual display canvas | Implemented |
 | Layout profiles | Implemented |
+| Profile Actions / workspace automation | Implemented for macOS profile apply |
 | Apply positions to macOS | Implemented |
 | Change primary display | Implemented through layout origin normalization |
 | Change macOS scale/resolution modes | Implemented when CoreGraphics reports usable modes |
@@ -73,6 +74,26 @@ Profiles store named display arrangements. The profile panel supports:
 - Highlight the currently opened profile
 
 Profiles persist to JSON in the app data directory.
+
+### Profile Actions
+
+Profiles can also store workspace actions. Profile actions run only after a profile layout applies successfully. Manual layout-only apply remains available when no saved profile is active.
+
+Supported actions:
+
+- Open a macOS `.app` bundle
+- Open an `http`, `https`, or `macappstore` URL
+- Pass one argument per line to opened apps
+- Delay actions relative to the start of the action phase
+- Place an opened app's front window on a selected monitor
+- Gracefully request an app to quit by name
+- Run a local `zsh` script command when advanced scripts are enabled
+
+Each action has an id, enabled flag, and optional conditions for platform, connected display, and display count. Unmatched conditions produce skipped action results rather than errors.
+
+Scripts are disabled by default and marked as advanced. Window placement uses macOS System Events, so macOS may require Accessibility permission for Display Layout Manager in System Settings > Privacy & Security > Accessibility.
+
+Arguments and window placement require a local installed `.app` bundle. App Store links open as URLs and do not launch the installed app unless macOS resolves that URL itself.
 
 ### Display Settings Inspector
 
@@ -144,11 +165,12 @@ The Diagnostics button exports a local JSON bundle and shows a toast when the do
 - Platform
 - Redacted display snapshots
 - Profile summaries
+- Profile action counts, action types, and app names
 - Automation rules
 - Recent automation events
 - Current recovery state when present
 
-Diagnostics hash display stable ids and do not export serial numbers or raw EDID by default.
+Diagnostics hash display stable ids and do not export serial numbers, raw EDID, or script commands by default.
 
 ### Menu Bar Quick Switching
 
@@ -182,6 +204,7 @@ Runtime data is stored in the app data directory. On macOS this resolves through
 Files currently used:
 
 - `profiles.json`
+- `settings.json`
 - `last-known-good-layout.json`
 - `automation-rules.json`
 - `automation-events.json`
@@ -239,6 +262,12 @@ Recommended manual macOS checks:
 - Launch with two or more displays and confirm relative positions match macOS System Settings.
 - Drag a display, apply the layout, and confirm the OS arrangement changes.
 - Save, open, edit, duplicate, delete, and reapply profiles.
+- Add Profile Actions, save a profile, apply it, and confirm action results appear.
+- Pick `/Applications/Slack.app` or another app and confirm native profile apply opens it.
+- Open an app with arguments, one argument per line.
+- Add monitor-relative window placement and confirm macOS prompts for Accessibility permission if needed.
+- Confirm close-app actions request a graceful quit.
+- Confirm scripts are skipped by default, then run only after enabling the advanced Scripts toggle.
 - Change primary display and confirm the main display moves to origin.
 - Change scale/resolution on a display that reports multiple CoreGraphics modes.
 - Install `displayplacer`, rotate a display, and confirm both the OS and node preview update.
@@ -250,6 +279,9 @@ Recommended manual macOS checks:
 ## Limitations
 
 - macOS rotation depends on `displayplacer`; public CoreGraphics APIs only expose rotation reading.
+- Profile Actions are implemented natively for macOS first; Windows and Linux action executors are future adapter work.
+- Window placement depends on macOS Accessibility permission and targets the front window of the selected app process.
+- Script actions are local `zsh` commands, disabled by default, and intentionally redacted from diagnostics.
 - Scale options depend on what CoreGraphics reports as usable for desktop GUI.
 - Stable identity uses `macos-cg-{display_id}` in the current macOS implementation, so robust EDID-based identity is still future work.
 - Windows and Linux X11 native adapters are planned but not complete.
@@ -262,11 +294,13 @@ Recommended manual macOS checks:
 - Canvas math and tests: `src/features/canvas/layoutMath.ts`
 - Display state: `src/features/displays`
 - Profile state: `src/features/profiles`
+- Settings state: `src/features/settings`
 - Automation, recovery, and diagnostics state: `src/features/betaStore.ts`
 - Rust command surface: `src-tauri/src/commands/mod.rs`
 - Rust display engine models: `src-tauri/src/display_engine/models.rs`
 - Rust validation: `src-tauri/src/display_engine/validation.rs`
 - Automation matching: `src-tauri/src/display_engine/automation.rs`
+- Profile action execution: `src-tauri/src/profile_actions.rs`
 - macOS adapter: `src-tauri/src/platform/macos/mod.rs`
 - Persistence: `src-tauri/src/persistence`
 - Menu bar integration: `src-tauri/src/tray.rs`

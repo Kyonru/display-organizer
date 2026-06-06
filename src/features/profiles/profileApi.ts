@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import {
   applyMockLayout,
   applyMockProfile,
+  applyMockProfileDraft,
   deleteMockProfile,
   duplicateMockProfile,
   getMockProfiles,
@@ -10,7 +11,13 @@ import {
   updateMockProfile,
 } from "../../shared/mockBackend";
 import { isTauriRuntime } from "../../shared/runtime";
-import type { ApplyLayoutResult, Layout, LayoutProfile, LayoutProfileDraft } from "../../shared/types";
+import type {
+  ApplyLayoutResult,
+  Layout,
+  LayoutProfile,
+  LayoutProfileDraft,
+  ProfileApplyResult,
+} from "../../shared/types";
 
 export function getProfiles(): Promise<LayoutProfile[]> {
   if (!isTauriRuntime()) {
@@ -68,10 +75,18 @@ export function applyLayout(layout: Layout): Promise<ApplyLayoutResult> {
   return invoke<ApplyLayoutResult>("apply_layout", { layout });
 }
 
-export function applyProfile(id: string): Promise<ApplyLayoutResult> {
+export function applyProfile(id: string): Promise<ProfileApplyResult> {
   if (!isTauriRuntime()) {
     return applyMockProfile(id);
   }
 
-  return invoke<ApplyLayoutResult>("apply_profile", { profileId: id });
+  return invoke<ProfileApplyResult>("apply_profile", { profileId: id });
+}
+
+export function applyProfileDraft(draft: LayoutProfileDraft): Promise<ProfileApplyResult> {
+  if (!isTauriRuntime()) {
+    return applyMockProfileDraft(draft);
+  }
+
+  return invoke<ProfileApplyResult>("apply_profile_draft", { draft });
 }

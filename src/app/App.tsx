@@ -10,8 +10,25 @@ import {
   useEdgesState,
   useNodesState,
 } from "@xyflow/react";
-import { Copy, FileDown, Monitor, Moon, Plus, RefreshCcw, Save, Sun, Trash2, Zap } from "lucide-react";
+import {
+  AppWindow,
+  ArrowDown,
+  ArrowUp,
+  Copy,
+  FileDown,
+  Monitor,
+  Moon,
+  Plus,
+  RefreshCcw,
+  Save,
+  Sun,
+  Terminal,
+  Trash2,
+  X,
+  Zap,
+} from "lucide-react";
 import { listen } from "@tauri-apps/api/event";
+import { open } from "@tauri-apps/plugin-dialog";
 import { clsx } from "clsx";
 import { useBetaStore } from "../features/betaStore";
 import { useCanvasStore } from "../features/canvas/canvasStore";
@@ -28,10 +45,23 @@ import {
   snapPoint,
 } from "../features/canvas/layoutMath";
 import { useDisplayStore } from "../features/displays/displayStore";
+import {
+  actionEnabled,
+  actionLabel,
+  argsToText,
+  createActionId,
+  createOpenAppAction,
+  maybeNumber,
+  moveAction,
+  normalizeAction,
+  textToArgs,
+  updatePositionValue,
+} from "../features/profiles/profileActions";
 import { useProfileStore } from "../features/profiles/profileStore";
+import { useSettingsStore } from "../features/settings/settingsStore";
 import { ensureMenuBarIconVisible } from "../features/tray/trayVisibility";
 import { isTauriRuntime } from "../shared/runtime";
-import type { Display, DisplayRotation } from "../shared/types";
+import type { Display, DisplayRotation, PlatformName, ProfileAction } from "../shared/types";
 
 type MonitorNodeData = {
   display: Display;
@@ -110,6 +140,7 @@ export function App() {
     isApplying,
     error: profileError,
     lastApplyResult,
+    lastProfileApplyResult,
     loadProfiles,
     selectProfile,
     saveProfile,
@@ -119,7 +150,14 @@ export function App() {
     deleteProfile,
     applyLayout,
     applyProfile,
+    applyProfileDraft,
   } = useProfileStore();
+  const {
+    settings,
+    error: settingsError,
+    loadSettings,
+    setScriptsEnabled,
+  } = useSettingsStore();
   const { gridSize, snapToGrid, setDirty, isDirty, setSelectedDisplayIds } = useCanvasStore();
   const {
     automationRules,
@@ -142,6 +180,7 @@ export function App() {
   const selectedDisplayIdRef = useRef<string | null>(null);
   const automationPromptSignatureRef = useRef<string | null>(null);
   const [profileName, setProfileName] = useState("Work Desk");
+  const [profileActions, setProfileActions] = useState<ProfileAction[]>([]);
   const [recoverySecondsRemaining, setRecoverySecondsRemaining] = useState(0);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
@@ -234,7 +273,8 @@ export function App() {
     void loadProfiles();
     void loadAutomationRules();
     void loadRecoveryState();
-  }, [loadAutomationRules, loadProfiles, loadRecoveryState, refreshDisplays]);
+    void loadSettings();
+  }, [loadAutomationRules, loadProfiles, loadRecoveryState, loadSettings, refreshDisplays]);
 
   useEffect(() => {
     if (!recoveryState) {
@@ -263,7 +303,32 @@ export function App() {
   }, [toastMessage]);
 
   useEffect(() => {
-    if (automationRules.length === 0 || profiles.length === 0 || displays.length === 0 || isApplying) {
+    if (
+      automationRules.length === 0 ||
+      profiles.length === 0 ||
+      displays.length === 0 ||
+      isApplying ||
+      pendingAutomationMatches.length > 0
+    ) {
+      return;
+    }
+
+    const setupSignature = [
+      automationRules
+        .map((rule) => `${rule.id}:${rule.enabled}:${rule.profileId}:${JSON.stringify(rule.match)}`)
+        .sort()
+        .join("|"),
+      profiles
+        .map((profile) => profile.id)
+        .sort()
+        .join("|"),
+      displays
+        .map((display) => display.stableId ?? display.id)
+        .sort()
+        .join("|"),
+    ].join("::");
+
+    if (automationPromptSignatureRef.current === setupSignature) {
       return;
     }
 
@@ -273,26 +338,19 @@ export function App() {
           return;
         }
 
-        const signature = evaluation.matches
-          .map((match) => match.rule.id)
-          .join(":");
-
-        if (automationPromptSignatureRef.current === signature) {
-          void clearPendingAutomation("skipped", "Duplicate automation prompt suppressed");
-          return;
-        }
-
-        automationPromptSignatureRef.current = signature;
+        automationPromptSignatureRef.current = setupSignature;
       });
     }, 2000);
 
     return () => window.clearTimeout(timeout);
   }, [
     automationRules.length,
-    clearPendingAutomation,
+    automationRules,
     displays,
     evaluateAutomation,
     isApplying,
+    pendingAutomationMatches.length,
+    profiles,
     profiles.length,
   ]);
 
@@ -321,6 +379,9 @@ export function App() {
     const profile = profiles.find((item) => item.id === activeProfileId);
     if (profile) {
       setProfileName(profile.name);
+      setProfileActions((profile.actions ?? []).map(normalizeAction));
+    } else if (!activeProfileId) {
+      setProfileActions([]);
     }
   }, [activeProfileId, profiles]);
 
@@ -474,17 +535,23 @@ export function App() {
     [setSelectedDisplayIds],
   );
 
+  const currentProfileDraft = useCallback(
+    (name: string) => ({
+      name,
+      description: null,
+      layout: currentLayout(),
+      actions: profileActions.map(normalizeAction),
+    }),
+    [currentLayout, profileActions],
+  );
+
   const handleSaveProfile = async () => {
     const name = profileName.trim();
     if (!name || !activeProfileId) {
       return;
     }
 
-    const profile = await updateProfile(activeProfileId, {
-      name,
-      description: null,
-      layout: currentLayout(),
-    });
+    const profile = await updateProfile(activeProfileId, currentProfileDraft(name));
 
     if (profile) {
       setDirty(false);
@@ -493,11 +560,7 @@ export function App() {
 
   const handleAddProfile = async () => {
     const name = profileName.trim() || `Profile ${profiles.length + 1}`;
-    const profile = await saveProfile({
-      name,
-      description: null,
-      layout: currentLayout(),
-    });
+    const profile = await saveProfile(currentProfileDraft(name));
 
     if (profile) {
       selectProfile(profile.id);
@@ -514,6 +577,7 @@ export function App() {
 
     selectProfile(profile.id);
     setProfileName(profile.name);
+    setProfileActions((profile.actions ?? []).map(normalizeAction));
     const selectedId = selectedDisplayIdRef.current;
     setNodes(
       buildNodesForProfile(displays, profile.id).map((node) => ({
@@ -524,7 +588,7 @@ export function App() {
     setDirty(false);
   };
 
-  const handleApplyLayout = useCallback(async () => {
+  const handleApplyManualLayout = useCallback(async () => {
     if (displays.length === 0) {
       return;
     }
@@ -536,6 +600,126 @@ export function App() {
       await loadRecoveryState();
     }
   }, [applyLayout, currentLayout, displays.length, loadRecoveryState, refreshDisplays, setDirty]);
+
+  const handleApplyCurrentDraft = useCallback(async () => {
+    if (displays.length === 0) {
+      return;
+    }
+
+    const name = profileName.trim() || "Profile";
+    const result = activeProfileId
+      ? await applyProfileDraft(currentProfileDraft(name))
+      : await applyLayout(currentLayout());
+
+    if (result?.applied) {
+      setDirty(false);
+      await refreshDisplays();
+      await loadRecoveryState();
+    }
+  }, [
+    activeProfileId,
+    applyLayout,
+    applyProfileDraft,
+    currentLayout,
+    currentProfileDraft,
+    displays.length,
+    loadRecoveryState,
+    profileName,
+    refreshDisplays,
+    setDirty,
+  ]);
+
+  const updateProfileAction = useCallback(
+    (actionId: string, updater: (action: ProfileAction) => ProfileAction) => {
+      setProfileActions((currentActions) =>
+        currentActions.map((action) => {
+          if ((action.id ?? "") !== actionId) {
+            return action;
+          }
+
+          return normalizeAction(updater(action));
+        }),
+      );
+      setDirty(true);
+    },
+    [setDirty],
+  );
+
+  const deleteProfileAction = useCallback(
+    (actionId: string) => {
+      setProfileActions((currentActions) => currentActions.filter((action) => action.id !== actionId));
+      setDirty(true);
+    },
+    [setDirty],
+  );
+
+  const moveProfileAction = useCallback(
+    (actionId: string, direction: -1 | 1) => {
+      setProfileActions((currentActions) => {
+        return moveAction(currentActions, actionId, direction);
+      });
+      setDirty(true);
+    },
+    [setDirty],
+  );
+
+  const pickApplicationPath = useCallback(async () => {
+    if (!isNativeApp) {
+      return window.prompt("Application path", "/Applications/Slack.app");
+    }
+
+    const result = await open({
+      multiple: false,
+      directory: false,
+      defaultPath: "/Applications",
+      filters: [{ name: "Applications", extensions: ["app"] }],
+      fileAccessMode: "scoped",
+    });
+
+    return Array.isArray(result) ? result[0] : result;
+  }, [isNativeApp]);
+
+  const handleAddOpenAppAction = useCallback(async () => {
+    const appPath = await pickApplicationPath();
+    if (!appPath) {
+      return;
+    }
+
+    setProfileActions((currentActions) => [
+      ...currentActions,
+      createOpenAppAction(appPath),
+    ]);
+    setDirty(true);
+  }, [pickApplicationPath, setDirty]);
+
+  const handleAddCloseAppAction = useCallback(() => {
+    setProfileActions((currentActions) => [
+      ...currentActions,
+      normalizeAction({
+        id: createActionId(),
+        type: "close_app",
+        enabled: true,
+        conditions: null,
+        appName: "",
+      }),
+    ]);
+    setDirty(true);
+  }, [setDirty]);
+
+  const handleAddScriptAction = useCallback(() => {
+    setProfileActions((currentActions) => [
+      ...currentActions,
+      normalizeAction({
+        id: createActionId(),
+        type: "run_script",
+        enabled: true,
+        conditions: null,
+        command: "",
+        delayMs: 0,
+      }),
+    ]);
+    setDirty(true);
+  }, [setDirty]);
 
   const handleCreateAutomationRule = async () => {
     const profile = profiles.find((item) => item.id === activeProfileId);
@@ -631,7 +815,7 @@ export function App() {
       void refreshDisplays();
     });
     const unlistenApply = listen("tray:apply-current-layout", () => {
-      void handleApplyLayout();
+      void handleApplyManualLayout();
     });
     const unlistenApplyProfile = listen<{ profileId: string }>("tray:apply-profile", (event) => {
       const profileId = event.payload.profileId;
@@ -653,7 +837,7 @@ export function App() {
       void unlistenApply.then((unlisten) => unlisten());
       void unlistenApplyProfile.then((unlisten) => unlisten());
     };
-  }, [applyProfile, handleApplyLayout, isNativeApp, loadRecoveryState, refreshDisplays, setDirty]);
+  }, [applyProfile, handleApplyManualLayout, isNativeApp, loadRecoveryState, refreshDisplays, setDirty]);
 
   const selectedStableId = selectedDisplay ? selectedDisplay.stableId ?? selectedDisplay.id : null;
   const selectedScaleValue =
@@ -727,7 +911,7 @@ export function App() {
           <button
             type="button"
             className={primaryButton}
-            onClick={() => void handleApplyLayout()}
+            onClick={() => void handleApplyCurrentDraft()}
             disabled={displays.length === 0 || isApplying}
           >
             <Zap size={16} />
@@ -752,7 +936,7 @@ export function App() {
         </div>
       </header>
 
-      <section className="grid min-h-0 grid-cols-[240px_minmax(0,1fr)_260px]">
+      <section className="grid min-h-0 grid-cols-[240px_minmax(0,1fr)_340px]">
         <aside className="min-h-0 overflow-auto border-r border-zinc-200 bg-zinc-50/80 p-3 dark:border-zinc-800 dark:bg-zinc-950">
           <div className="mb-2 flex items-center justify-between">
             <h2 className="text-xs font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">Profiles</h2>
@@ -792,7 +976,7 @@ export function App() {
                     ) : null}
                   </span>
                   <span className="mt-0.5 block truncate text-[11px] text-zinc-500 dark:text-zinc-400">
-                    {profile.layout.displays.length} displays
+                    {profile.layout.displays.length} displays · {(profile.actions ?? []).length} actions
                   </span>
                 </button>
                 <div className="flex shrink-0 gap-1">
@@ -1109,9 +1293,359 @@ export function App() {
               ) : null}
             </div>
           ) : null}
-          {displayError || profileError || betaError ? (
+          <div className="mt-3 border-t border-zinc-200 pt-3 dark:border-zinc-800">
+            <div className="mb-2 flex items-center justify-between gap-2">
+              <div className="min-w-0">
+                <h2 className="text-xs font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
+                  Profile Actions
+                </h2>
+                <p className="truncate text-[11px] text-zinc-500 dark:text-zinc-400">
+                  {profileActions.length} action{profileActions.length === 1 ? "" : "s"}
+                </p>
+              </div>
+              <label className="flex items-center gap-1.5 text-[11px] font-medium text-zinc-600 dark:text-zinc-300">
+                <input
+                  type="checkbox"
+                  checked={settings.profileActions.scriptsEnabled}
+                  onChange={(event) => void setScriptsEnabled(event.target.checked)}
+                />
+                Scripts
+              </label>
+            </div>
+            <div className="mb-2 flex flex-wrap gap-1.5">
+              <button type="button" className={buttonBase} onClick={() => void handleAddOpenAppAction()}>
+                <AppWindow size={14} />
+                App
+              </button>
+              <button type="button" className={buttonBase} onClick={handleAddCloseAppAction}>
+                <X size={14} />
+                Close
+              </button>
+              <button type="button" className={buttonBase} onClick={handleAddScriptAction}>
+                <Terminal size={14} />
+                Script
+              </button>
+            </div>
+            {!settings.profileActions.scriptsEnabled ? (
+              <p className="mb-2 rounded border border-amber-200 bg-amber-50 px-2 py-1.5 text-[11px] leading-4 text-amber-800 dark:border-amber-900/60 dark:bg-amber-950/50 dark:text-amber-100">
+                Advanced scripts are saved but skipped until enabled.
+              </p>
+            ) : null}
+            <div className="space-y-2">
+              {profileActions.length === 0 ? (
+                <p className="rounded border border-dashed border-zinc-300 p-2 text-xs leading-5 text-zinc-500 dark:border-zinc-800 dark:text-zinc-400">
+                  Add apps, window placement, close-app steps, or scripts to this profile.
+                </p>
+              ) : null}
+              {profileActions.map((action, index) => {
+                const actionId = action.id ?? "";
+                const conditions = action.conditions ?? {};
+                return (
+                  <article
+                    key={actionId}
+                    className="rounded border border-zinc-200 bg-white p-2 text-xs dark:border-zinc-800 dark:bg-zinc-900/70"
+                  >
+                    <div className="mb-2 flex items-center gap-1.5">
+                      <input
+                        type="checkbox"
+                        checked={actionEnabled(action)}
+                        onChange={(event) =>
+                          updateProfileAction(actionId, (currentAction) => ({
+                            ...currentAction,
+                            enabled: event.target.checked,
+                          } as ProfileAction))
+                        }
+                      />
+                      <strong className="min-w-0 flex-1 truncate text-zinc-900 dark:text-zinc-100">
+                        {actionLabel(action)}
+                      </strong>
+                      <button
+                        type="button"
+                        className={iconButton}
+                        aria-label="Move action up"
+                        disabled={index === 0}
+                        onClick={() => moveProfileAction(actionId, -1)}
+                      >
+                        <ArrowUp size={13} />
+                      </button>
+                      <button
+                        type="button"
+                        className={iconButton}
+                        aria-label="Move action down"
+                        disabled={index === profileActions.length - 1}
+                        onClick={() => moveProfileAction(actionId, 1)}
+                      >
+                        <ArrowDown size={13} />
+                      </button>
+                      <button
+                        type="button"
+                        className={iconButton}
+                        aria-label="Delete action"
+                        onClick={() => deleteProfileAction(actionId)}
+                      >
+                        <Trash2 size={13} />
+                      </button>
+                    </div>
+
+                    {action.type === "open_app" ? (
+                      <div className="space-y-1.5">
+                        <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-1.5">
+                          <input
+                            className={fieldInput}
+                            value={action.appPath}
+                            onChange={(event) =>
+                              updateProfileAction(actionId, (currentAction) =>
+                                currentAction.type === "open_app"
+                                  ? { ...currentAction, appPath: event.target.value }
+                                  : currentAction,
+                              )
+                            }
+                            placeholder="/Applications/App.app or https://..."
+                          />
+                          <button
+                            type="button"
+                            className={buttonBase}
+                            onClick={() =>
+                              void pickApplicationPath().then((appPath) => {
+                                if (appPath) {
+                                  updateProfileAction(actionId, (currentAction) =>
+                                    currentAction.type === "open_app"
+                                      ? { ...currentAction, appPath }
+                                      : currentAction,
+                                  );
+                                }
+                              })
+                            }
+                          >
+                            Pick
+                          </button>
+                        </div>
+                        <textarea
+                          className="min-h-14 w-full resize-y rounded border border-zinc-200 bg-white px-2 py-1.5 text-xs text-zinc-900 outline-none transition focus:border-emerald-500 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-100"
+                          value={argsToText(action.args)}
+                          onChange={(event) =>
+                            updateProfileAction(actionId, (currentAction) =>
+                              currentAction.type === "open_app"
+                                ? { ...currentAction, args: textToArgs(event.target.value) }
+                                : currentAction,
+                            )
+                          }
+                          placeholder="Arguments, one per line"
+                        />
+                        <div className="grid grid-cols-2 gap-1.5">
+                          <label className="space-y-1">
+                            <span className="text-[11px] text-zinc-500 dark:text-zinc-400">Delay ms</span>
+                            <input
+                              className={fieldInput}
+                              type="number"
+                              min={0}
+                              value={action.delayMs ?? 0}
+                              onChange={(event) =>
+                                updateProfileAction(actionId, (currentAction) =>
+                                  currentAction.type === "open_app"
+                                    ? { ...currentAction, delayMs: Math.max(0, Number(event.target.value) || 0) }
+                                    : currentAction,
+                                )
+                              }
+                            />
+                          </label>
+                          <label className="space-y-1">
+                            <span className="text-[11px] text-zinc-500 dark:text-zinc-400">Monitor</span>
+                            <select
+                              className={fieldInput}
+                              value={action.monitorId ?? ""}
+                              onChange={(event) =>
+                                updateProfileAction(actionId, (currentAction) =>
+                                  currentAction.type === "open_app"
+                                    ? { ...currentAction, monitorId: event.target.value || null }
+                                    : currentAction,
+                                )
+                              }
+                            >
+                              <option value="">Global</option>
+                              {displays.map((display) => (
+                                <option key={display.stableId ?? display.id} value={display.stableId ?? display.id}>
+                                  {display.name}
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+                        </div>
+                        {action.position ? (
+                          <div className="grid grid-cols-4 gap-1">
+                            {(["x", "y", "width", "height"] as const).map((key) => (
+                              <label key={key} className="space-y-1">
+                                <span className="text-[10px] uppercase text-zinc-500 dark:text-zinc-400">{key}</span>
+                                <input
+                                  className={fieldInput}
+                                  type="number"
+                                  min={key === "width" || key === "height" ? 1 : undefined}
+                                  value={action.position?.[key] ?? ""}
+                                  onChange={(event) =>
+                                    updateProfileAction(actionId, (currentAction) =>
+                                      currentAction.type === "open_app"
+                                        ? {
+                                            ...currentAction,
+                                            position: updatePositionValue(
+                                              currentAction.position,
+                                              key,
+                                              event.target.value,
+                                            ),
+                                          }
+                                        : currentAction,
+                                    )
+                                  }
+                                />
+                              </label>
+                            ))}
+                            <button
+                              type="button"
+                              className="col-span-4 text-left text-[11px] font-semibold text-zinc-500 underline dark:text-zinc-400"
+                              onClick={() =>
+                                updateProfileAction(actionId, (currentAction) =>
+                                  currentAction.type === "open_app"
+                                    ? { ...currentAction, position: null }
+                                    : currentAction,
+                                )
+                              }
+                            >
+                              Clear placement
+                            </button>
+                          </div>
+                        ) : (
+                          <button
+                            type="button"
+                            className="text-[11px] font-semibold text-zinc-500 underline dark:text-zinc-400"
+                            onClick={() =>
+                              updateProfileAction(actionId, (currentAction) =>
+                                currentAction.type === "open_app"
+                                  ? {
+                                      ...currentAction,
+                                      position: { x: 0, y: 0, width: 1200, height: 800 },
+                                    }
+                                  : currentAction,
+                              )
+                            }
+                          >
+                            Add window placement
+                          </button>
+                        )}
+                      </div>
+                    ) : null}
+
+                    {action.type === "close_app" ? (
+                      <input
+                        className={fieldInput}
+                        value={action.appName}
+                        onChange={(event) =>
+                          updateProfileAction(actionId, (currentAction) =>
+                            currentAction.type === "close_app"
+                              ? { ...currentAction, appName: event.target.value }
+                              : currentAction,
+                          )
+                        }
+                        placeholder="App name"
+                      />
+                    ) : null}
+
+                    {action.type === "run_script" ? (
+                      <div className="space-y-1.5">
+                        <input
+                          className={fieldInput}
+                          value={action.command}
+                          disabled={!settings.profileActions.scriptsEnabled}
+                          onChange={(event) =>
+                            updateProfileAction(actionId, (currentAction) =>
+                              currentAction.type === "run_script"
+                                ? { ...currentAction, command: event.target.value }
+                                : currentAction,
+                            )
+                          }
+                          placeholder="zsh command"
+                        />
+                        <label className="block space-y-1">
+                          <span className="text-[11px] text-zinc-500 dark:text-zinc-400">Delay ms</span>
+                          <input
+                            className={fieldInput}
+                            type="number"
+                            min={0}
+                            value={action.delayMs ?? 0}
+                            onChange={(event) =>
+                              updateProfileAction(actionId, (currentAction) =>
+                                currentAction.type === "run_script"
+                                  ? { ...currentAction, delayMs: Math.max(0, Number(event.target.value) || 0) }
+                                  : currentAction,
+                              )
+                            }
+                          />
+                        </label>
+                      </div>
+                    ) : null}
+
+                    <div className="mt-2 grid grid-cols-3 gap-1.5 border-t border-zinc-200 pt-2 dark:border-zinc-800">
+                      <select
+                        className={fieldInput}
+                        value={conditions.platform ?? ""}
+                        onChange={(event) =>
+                          updateProfileAction(actionId, (currentAction) => ({
+                            ...currentAction,
+                            conditions: {
+                              ...(currentAction.conditions ?? {}),
+                              platform: (event.target.value || null) as PlatformName | null,
+                            },
+                          } as ProfileAction))
+                        }
+                      >
+                        <option value="">Any OS</option>
+                        <option value="macos">macOS</option>
+                        <option value="windows">Windows</option>
+                        <option value="linux">Linux</option>
+                      </select>
+                      <select
+                        className={fieldInput}
+                        value={conditions.displayStableId ?? ""}
+                        onChange={(event) =>
+                          updateProfileAction(actionId, (currentAction) => ({
+                            ...currentAction,
+                            conditions: {
+                              ...(currentAction.conditions ?? {}),
+                              displayStableId: event.target.value || null,
+                            },
+                          } as ProfileAction))
+                        }
+                      >
+                        <option value="">Any display</option>
+                        {displays.map((display) => (
+                          <option key={display.stableId ?? display.id} value={display.stableId ?? display.id}>
+                            {display.name}
+                          </option>
+                        ))}
+                      </select>
+                      <input
+                        className={fieldInput}
+                        type="number"
+                        min={0}
+                        value={conditions.displayCount ?? ""}
+                        onChange={(event) =>
+                          updateProfileAction(actionId, (currentAction) => ({
+                            ...currentAction,
+                            conditions: {
+                              ...(currentAction.conditions ?? {}),
+                              displayCount: maybeNumber(event.target.value),
+                            },
+                          } as ProfileAction))
+                        }
+                        placeholder="Count"
+                      />
+                    </div>
+                  </article>
+                );
+              })}
+            </div>
+          </div>
+          {displayError || profileError || betaError || settingsError ? (
             <div className="mt-3 rounded border border-red-200 bg-red-50 p-2 text-xs leading-5 text-red-700 dark:border-red-900/60 dark:bg-red-950/50 dark:text-red-200">
-              {displayError ?? profileError ?? betaError}
+              {displayError ?? profileError ?? betaError ?? settingsError}
               <button
                 type="button"
                 className="mt-2 flex items-center gap-1 font-semibold underline"
@@ -1124,8 +1658,30 @@ export function App() {
           ) : null}
           {lastApplyResult ? (
             <p className="mt-3 rounded border border-emerald-200 bg-emerald-50 p-2 text-xs leading-5 text-emerald-700 dark:border-emerald-900/60 dark:bg-emerald-950/50 dark:text-emerald-200">
-              {lastApplyResult.message}
+              {lastProfileApplyResult?.message ?? lastApplyResult.message}
             </p>
+          ) : null}
+          {lastProfileApplyResult?.actionResults.length ? (
+            <div className="mt-3 rounded border border-zinc-200 bg-white p-2 text-xs leading-5 dark:border-zinc-800 dark:bg-zinc-900/70">
+              <strong className="block text-zinc-900 dark:text-zinc-100">Action results</strong>
+              <div className="mt-1 space-y-1">
+                {lastProfileApplyResult.actionResults.map((result) => (
+                  <p
+                    key={result.actionId}
+                    className={clsx(
+                      "rounded px-1.5 py-1",
+                      result.status === "error"
+                        ? "bg-red-50 text-red-700 dark:bg-red-950/40 dark:text-red-200"
+                        : result.status === "skipped"
+                          ? "bg-amber-50 text-amber-700 dark:bg-amber-950/40 dark:text-amber-200"
+                          : "bg-emerald-50 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-200",
+                    )}
+                  >
+                    {result.actionType.replace("_", " ")} · {result.message}
+                  </p>
+                ))}
+              </div>
+            </div>
           ) : null}
         </aside>
       </section>

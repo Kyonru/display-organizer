@@ -195,6 +195,7 @@ mod tests {
                 displays: Vec::new(),
                 primary_display_stable_id: None,
             },
+            actions: Vec::new(),
             detection_rules: Vec::new(),
             hotkey: None,
             created_at: "now".to_string(),
