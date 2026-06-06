@@ -64,8 +64,27 @@ button:disabled {
 }
 
 .toolbar {
+  align-items: center;
   display: flex;
   gap: 8px;
+}
+
+.profile-name-field {
+  align-items: center;
+  display: flex;
+  gap: 7px;
+  color: #64717f;
+  font-size: 12px;
+}
+
+.profile-name-field input {
+  width: 160px;
+  border: 1px solid #c8d0d9;
+  border-radius: 6px;
+  color: #20242a;
+  font: inherit;
+  min-height: 34px;
+  padding: 0 10px;
 }
 
 .toolbar button,

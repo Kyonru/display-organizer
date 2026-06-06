@@ -20,6 +20,7 @@ import {
 } from "../features/canvas/layoutMath";
 import { useDisplayStore } from "../features/displays/displayStore";
 import { useProfileStore } from "../features/profiles/profileStore";
+import { isTauriRuntime } from "../shared/runtime";
 import type { Display } from "../shared/types";
 
 type MonitorNodeData = {
@@ -58,6 +59,7 @@ const nodeTypes = {
 };
 
 export function App() {
+  const isNativeApp = isTauriRuntime();
   const { displays, isRefreshing, error: displayError, refreshDisplays } = useDisplayStore();
   const {
     profiles,
@@ -76,6 +78,7 @@ export function App() {
   const [nodes, setNodes, onNodesChange] = useNodesState<Node<MonitorNodeData>>([]);
   const [edges, , onEdgesChange] = useEdgesState([]);
   const [selectedDisplayId, setSelectedDisplayId] = useState<string | null>(null);
+  const [profileName, setProfileName] = useState("Work Desk");
 
   useEffect(() => {
     void refreshDisplays();
@@ -137,27 +140,24 @@ export function App() {
   );
 
   const handleSaveProfile = async () => {
-    const name = window.prompt("Profile name", "Work Desk");
-    if (!name?.trim()) {
+    const name = profileName.trim();
+    if (!name) {
       return;
     }
 
-    await saveProfile({
-      name: name.trim(),
+    const profile = await saveProfile({
+      name,
       description: null,
       layout: currentLayout(),
     });
+
+    if (profile) {
+      setProfileName(`${name} Copy`);
+    }
   };
 
   const handleApplyLayout = async () => {
     if (displays.length === 0) {
-      return;
-    }
-
-    const confirmed = window.confirm(
-      "Apply this monitor arrangement to macOS? Your current layout will be saved as a recovery snapshot.",
-    );
-    if (!confirmed) {
       return;
     }
 
@@ -173,9 +173,20 @@ export function App() {
       <header className="top-bar">
         <div>
           <h1>Display Layout Manager</h1>
-          <p>{displays.length} display{displays.length === 1 ? "" : "s"} connected</p>
+          <p>
+            {displays.length} display{displays.length === 1 ? "" : "s"} connected
+            {!isNativeApp ? " · browser preview" : ""}
+          </p>
         </div>
         <div className="toolbar">
+          <label className="profile-name-field">
+            <span>Profile</span>
+            <input
+              value={profileName}
+              onChange={(event) => setProfileName(event.target.value)}
+              placeholder="Profile name"
+            />
+          </label>
           <button type="button" onClick={() => void refreshDisplays()} disabled={isRefreshing}>
             <RefreshCcw size={16} />
             Refresh
@@ -212,14 +223,11 @@ export function App() {
                   type="button"
                   className="profile-main"
                   onClick={() => {
-                    const confirmed = window.confirm(`Apply "${profile.name}" to macOS?`);
-                    if (confirmed) {
-                      void applyProfile(profile.id).then((result) => {
-                        if (result?.applied) {
-                          void refreshDisplays();
-                        }
-                      });
-                    }
+                    void applyProfile(profile.id).then((result) => {
+                      if (result?.applied) {
+                        void refreshDisplays();
+                      }
+                    });
                   }}
                 >
                   <strong>{profile.name}</strong>
