@@ -15,12 +15,13 @@ pub fn apply_layout(layout: &Layout) -> Result<ApplyLayoutResult, AppError> {
     let previous_layout = Layout::from(active_displays.as_slice());
     let normalized = normalize_primary_to_origin(layout);
 
-    platform::apply_layout(&normalized, &active_displays)?;
+    let display_results = platform::apply_layout(&normalized, &active_displays)?;
 
     Ok(ApplyLayoutResult {
         applied: true,
         message: "Layout applied to macOS.".to_string(),
         previous_layout: Some(previous_layout),
         applied_layout: Some(normalized),
+        display_results,
     })
 }

@@ -1157,6 +1157,10 @@ Scope:
 - Profile duplication
 - Basic auto-profile matching
 - Apply validation and error reporting
+- Change primary display
+- Change display rotation where supported
+- Change OS-native UI scale where supported
+- Document read-only or unsupported scale/rotation/primary capability differences per platform
 
 Alpha success criteria:
 
@@ -1164,6 +1168,8 @@ Alpha success criteria:
 - Hotplug events refresh the UI
 - Profiles can be matched to connected setups
 - Tray quick switching works
+- Scale, rotation, and primary controls are visible in the inspector and enabled only when the active platform adapter reports apply support
+- Saved profiles preserve scale mode, rotation, and primary display settings where supported
 
 ---
 

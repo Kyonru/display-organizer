@@ -205,6 +205,7 @@ mod tests {
             layout: Layout {
                 displays: vec![LayoutDisplay {
                     stable_id: "display-a".to_string(),
+                    mode_id: Some("display-a-mode".to_string()),
                     position: Point { x: 0, y: 0 },
                     resolution: Size {
                         width: 100,

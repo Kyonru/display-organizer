@@ -1,42 +1,94 @@
 import { describe, expect, it } from "vitest";
 import type { Display } from "../../shared/types";
-import { canvasPositionsToLayout, displaysToCanvasNodes, snapPoint } from "./layoutMath";
+import {
+  canvasPositionsToLayout,
+  displaysToCanvasNodes,
+  displayToLayoutDisplay,
+  resolveScaleOptionForLayoutDisplay,
+  snapPoint,
+} from "./layoutMath";
 
-const displays: Display[] = [
-  {
+function display(overrides: Partial<Display>): Display {
+  return {
     id: "1",
     stableId: "macos-cg-1",
-    name: "Built-in",
+    modeId: "mode-default",
+    name: "Display",
     manufacturer: null,
     model: null,
     serialNumber: null,
-    resolution: { width: 1728, height: 1117 },
-    refreshRate: null,
-    scaleFactor: 2,
-    position: { x: 0, y: 0 },
-    rotation: 0,
-    isPrimary: true,
-    isInternal: true,
-    connectionType: "internal",
-    bounds: { x: 0, y: 0, width: 1728, height: 1117 },
-  },
-  {
-    id: "2",
-    stableId: "macos-cg-2",
-    name: "External",
-    manufacturer: null,
-    model: null,
-    serialNumber: null,
-    resolution: { width: 2560, height: 1440 },
+    resolution: { width: 100, height: 100 },
     refreshRate: null,
     scaleFactor: 1,
-    position: { x: -2560, y: 0 },
+    position: { x: 0, y: 0 },
     rotation: 0,
     isPrimary: false,
     isInternal: false,
     connectionType: "unknown",
+    bounds: { x: 0, y: 0, width: 100, height: 100 },
+    capabilities: {
+      position: { supported: true, reason: null },
+      primary: { supported: true, reason: null },
+      rotation: { supported: true, reason: null },
+      scale: { supported: true, reason: null },
+    },
+    scaleOptions: [
+      {
+        id: "mode-default",
+        label: "Default",
+        scaleFactor: 1,
+        resolution: { width: 100, height: 100 },
+        refreshRate: null,
+        isCurrent: true,
+      },
+    ],
+    ...overrides,
+  };
+}
+
+const displays: Display[] = [
+  display({
+    id: "1",
+    stableId: "macos-cg-1",
+    modeId: "mode-built-in",
+    name: "Built-in",
+    resolution: { width: 1728, height: 1117 },
+    scaleFactor: 2,
+    position: { x: 0, y: 0 },
+    isPrimary: true,
+    isInternal: true,
+    connectionType: "internal",
+    bounds: { x: 0, y: 0, width: 1728, height: 1117 },
+    scaleOptions: [
+      {
+        id: "mode-built-in",
+        label: "Built-in",
+        scaleFactor: 2,
+        resolution: { width: 1728, height: 1117 },
+        refreshRate: null,
+        isCurrent: true,
+      },
+    ],
+  }),
+  display({
+    id: "2",
+    stableId: "macos-cg-2",
+    modeId: "mode-external",
+    name: "External",
+    resolution: { width: 2560, height: 1440 },
+    position: { x: -2560, y: 0 },
     bounds: { x: -2560, y: 0, width: 2560, height: 1440 },
-  },
+    scaleOptions: [
+      {
+        id: "mode-external",
+        label: "External",
+        scaleFactor: 1,
+        resolution: { width: 2560, height: 1440 },
+        refreshRate: null,
+        isCurrent: true,
+      },
+    ],
+  }),
 ];
 
 describe("layoutMath", () => {
@@ -59,5 +111,42 @@ describe("layoutMath", () => {
 
   it("snaps points to a fixed grid", () => {
     expect(snapPoint({ x: 31, y: 47 }, 20)).toEqual({ x: 40, y: 40 });
+  });
+
+  it("resolves legacy macOS mode ids to current full scale option ids", () => {
+    const externalDisplay = display({
+      id: "2",
+      stableId: "macos-cg-2",
+      modeId: "macos-mode-98-2560x1440-2560x1440-180000",
+      resolution: { width: 2560, height: 1440 },
+      refreshRate: 180,
+      scaleFactor: 1,
+      scaleOptions: [
+        {
+          id: "macos-mode-98-1920x1080-3840x2160-60000",
+          label: "1920 x 1080",
+          scaleFactor: 2,
+          resolution: { width: 1920, height: 1080 },
+          refreshRate: 60,
+          isCurrent: false,
+        },
+        {
+          id: "macos-mode-98-2560x1440-2560x1440-180000",
+          label: "2560 x 1440",
+          scaleFactor: 1,
+          resolution: { width: 2560, height: 1440 },
+          refreshRate: 180,
+          isCurrent: true,
+        },
+      ],
+    });
+    const layoutDisplay = {
+      ...displayToLayoutDisplay(externalDisplay),
+      modeId: "macos-mode-98",
+    };
+
+    expect(resolveScaleOptionForLayoutDisplay(externalDisplay, layoutDisplay)?.id).toBe(
+      "macos-mode-98-2560x1440-2560x1440-180000",
+    );
   });
 });

@@ -6,6 +6,7 @@ export const mockDisplays: Display[] = [
   {
     id: "mock-built-in",
     stableId: "mock-built-in",
+    modeId: "mock-built-in-retina",
     name: "Built-in Display",
     manufacturer: null,
     model: "Preview Retina",
@@ -19,10 +20,30 @@ export const mockDisplays: Display[] = [
     isInternal: true,
     connectionType: "internal",
     bounds: { x: 0, y: 0, width: 1728, height: 1117 },
+    capabilities: previewCapabilities(),
+    scaleOptions: [
+      {
+        id: "mock-built-in-default",
+        label: "Default 1512 x 982 (2.00x)",
+        scaleFactor: 2,
+        resolution: { width: 1512, height: 982 },
+        refreshRate: null,
+        isCurrent: false,
+      },
+      {
+        id: "mock-built-in-retina",
+        label: "More Space 1728 x 1117 (2.00x)",
+        scaleFactor: 2,
+        resolution: { width: 1728, height: 1117 },
+        refreshRate: null,
+        isCurrent: true,
+      },
+    ],
   },
   {
     id: "mock-external",
     stableId: "mock-external",
+    modeId: "mock-external-default",
     name: "Studio Display",
     manufacturer: null,
     model: "Preview External",
@@ -36,8 +57,36 @@ export const mockDisplays: Display[] = [
     isInternal: false,
     connectionType: "unknown",
     bounds: { x: 1728, y: 0, width: 2560, height: 1440 },
+    capabilities: previewCapabilities(),
+    scaleOptions: [
+      {
+        id: "mock-external-default",
+        label: "Default 2560 x 1440 (1.00x)",
+        scaleFactor: 1,
+        resolution: { width: 2560, height: 1440 },
+        refreshRate: null,
+        isCurrent: true,
+      },
+      {
+        id: "mock-external-large",
+        label: "Larger Text 1920 x 1080 (1.33x)",
+        scaleFactor: 1.33,
+        resolution: { width: 1920, height: 1080 },
+        refreshRate: null,
+        isCurrent: false,
+      },
+    ],
   },
 ];
+
+function previewCapabilities() {
+  return {
+    position: { supported: true, reason: null },
+    primary: { supported: true, reason: null },
+    rotation: { supported: true, reason: null },
+    scale: { supported: true, reason: null },
+  };
+}
 
 function now() {
   return new Date().toISOString();
@@ -148,6 +197,17 @@ export function applyMockLayout(layout: Layout): Promise<ApplyLayoutResult> {
     message: "Preview layout applied. Open the Tauri app to apply changes to macOS.",
     previousLayout: null,
     appliedLayout: layout,
+    displayResults: layout.displays.map((display) => ({
+      stableId: display.stableId,
+      status: "applied",
+      message: "Preview applied.",
+      applied: {
+        position: true,
+        primary: layout.primaryDisplayStableId === display.stableId,
+        rotation: true,
+        scale: Boolean(display.modeId),
+      },
+    })),
   });
 }
 

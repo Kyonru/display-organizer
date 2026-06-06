@@ -23,6 +23,49 @@ pub struct Rect {
     pub height: u32,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct DisplayCapability {
+    pub supported: bool,
+    pub reason: Option<String>,
+}
+
+impl DisplayCapability {
+    pub fn supported() -> Self {
+        Self {
+            supported: true,
+            reason: None,
+        }
+    }
+
+    pub fn unsupported(reason: impl Into<String>) -> Self {
+        Self {
+            supported: false,
+            reason: Some(reason.into()),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct DisplayCapabilities {
+    pub position: DisplayCapability,
+    pub primary: DisplayCapability,
+    pub rotation: DisplayCapability,
+    pub scale: DisplayCapability,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct DisplayScaleOption {
+    pub id: String,
+    pub label: String,
+    pub scale_factor: f64,
+    pub resolution: Size,
+    pub refresh_rate: Option<f64>,
+    pub is_current: bool,
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 pub enum DisplayRotation {
     #[serde(rename = "0")]
@@ -63,6 +106,7 @@ pub enum DisplayConnectionType {
 pub struct Display {
     pub id: String,
     pub stable_id: Option<String>,
+    pub mode_id: Option<String>,
     pub name: String,
     pub manufacturer: Option<String>,
     pub model: Option<String>,
@@ -76,12 +120,16 @@ pub struct Display {
     pub is_internal: bool,
     pub connection_type: Option<DisplayConnectionType>,
     pub bounds: Rect,
+    pub capabilities: DisplayCapabilities,
+    pub scale_options: Vec<DisplayScaleOption>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct LayoutDisplay {
     pub stable_id: String,
+    #[serde(default)]
+    pub mode_id: Option<String>,
     pub position: Point,
     pub resolution: Size,
     pub refresh_rate: Option<f64>,
@@ -142,12 +190,47 @@ pub struct ApplyLayoutResult {
     pub message: String,
     pub previous_layout: Option<Layout>,
     pub applied_layout: Option<Layout>,
+    #[serde(default)]
+    pub display_results: Vec<ApplyDisplayChangeResult>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ApplyDisplayChangeResult {
+    pub stable_id: String,
+    pub status: ApplyDisplayChangeStatus,
+    pub message: String,
+    pub applied: AppliedDisplayChanges,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub enum ApplyDisplayChangeStatus {
+    Applied,
+    Skipped,
+    Error,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct AppliedDisplayChanges {
+    pub position: bool,
+    pub primary: bool,
+    pub rotation: bool,
+    pub scale: bool,
 }
 
 impl From<&Display> for LayoutDisplay {
     fn from(value: &Display) -> Self {
         Self {
             stable_id: value.stable_id.clone().unwrap_or_else(|| value.id.clone()),
+            mode_id: value.mode_id.clone().or_else(|| {
+                value
+                    .scale_options
+                    .iter()
+                    .find(|option| option.is_current)
+                    .map(|option| option.id.clone())
+            }),
             position: value.position,
             resolution: value.resolution,
             refresh_rate: value.refresh_rate,

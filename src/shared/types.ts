@@ -21,9 +21,31 @@ export type Size = {
 
 export type Rect = Point & Size;
 
+export type DisplayCapability = {
+  supported: boolean;
+  reason: string | null;
+};
+
+export type DisplayCapabilities = {
+  position: DisplayCapability;
+  primary: DisplayCapability;
+  rotation: DisplayCapability;
+  scale: DisplayCapability;
+};
+
+export type DisplayScaleOption = {
+  id: string;
+  label: string;
+  scaleFactor: number;
+  resolution: Size;
+  refreshRate: number | null;
+  isCurrent: boolean;
+};
+
 export type Display = {
   id: string;
   stableId: string | null;
+  modeId: string | null;
   name: string;
   manufacturer: string | null;
   model: string | null;
@@ -37,10 +59,13 @@ export type Display = {
   isInternal: boolean;
   connectionType: DisplayConnectionType | null;
   bounds: Rect;
+  capabilities: DisplayCapabilities;
+  scaleOptions: DisplayScaleOption[];
 };
 
 export type LayoutDisplay = {
   stableId: string;
+  modeId?: string | null;
   position: Point;
   resolution: Size;
   refreshRate: number | null;
@@ -81,4 +106,17 @@ export type ApplyLayoutResult = {
   message: string;
   previousLayout?: Layout | null;
   appliedLayout?: Layout | null;
+  displayResults?: ApplyDisplayChangeResult[];
+};
+
+export type ApplyDisplayChangeResult = {
+  stableId: string;
+  status: "applied" | "skipped" | "error";
+  message: string;
+  applied: {
+    position: boolean;
+    primary: boolean;
+    rotation: boolean;
+    scale: boolean;
+  };
 };

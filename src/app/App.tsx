@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Background,
   Controls,
@@ -14,16 +14,20 @@ import { listen } from "@tauri-apps/api/event";
 import { clsx } from "clsx";
 import { useCanvasStore } from "../features/canvas/canvasStore";
 import {
+  CANVAS_SCALE,
+  NODE_MIN_HEIGHT,
+  NODE_MIN_WIDTH,
   canvasPositionsToLayout,
   displaysToCanvasNodes,
   displaysToLayout,
+  resolveScaleOptionForLayoutDisplay,
   snapPoint,
 } from "../features/canvas/layoutMath";
 import { useDisplayStore } from "../features/displays/displayStore";
 import { useProfileStore } from "../features/profiles/profileStore";
 import { ensureMenuBarIconVisible } from "../features/tray/trayVisibility";
 import { isTauriRuntime } from "../shared/runtime";
-import type { Display } from "../shared/types";
+import type { Display, DisplayRotation } from "../shared/types";
 
 type MonitorNodeData = {
   display: Display;
@@ -41,6 +45,16 @@ const iconButton =
 
 const primaryButton =
   "inline-flex h-8 items-center justify-center gap-1.5 rounded border border-emerald-600 bg-emerald-600 px-2.5 text-xs font-semibold text-white transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-45";
+
+const fieldInput =
+  "h-8 w-full rounded border border-zinc-200 bg-white px-2 text-xs text-zinc-900 outline-none transition focus:border-emerald-500 disabled:cursor-not-allowed disabled:opacity-55 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-100";
+
+function monitorNodeDimensions(display: Display) {
+  return {
+    width: Math.max(NODE_MIN_WIDTH, display.bounds.width * CANVAS_SCALE),
+    height: Math.max(NODE_MIN_HEIGHT, display.bounds.height * CANVAS_SCALE),
+  };
+}
 
 function MonitorNode({ data, selected }: NodeProps<Node<MonitorNodeData>>) {
   const display = data.display;
@@ -106,6 +120,7 @@ export function App() {
   const [nodes, setNodes, onNodesChange] = useNodesState<Node<MonitorNodeData>>([]);
   const [edges, , onEdgesChange] = useEdgesState([]);
   const [selectedDisplayId, setSelectedDisplayId] = useState<string | null>(null);
+  const selectedDisplayIdRef = useRef<string | null>(null);
   const [profileName, setProfileName] = useState("Work Desk");
 
   useEffect(() => {
@@ -149,7 +164,40 @@ export function App() {
       const patchedDisplays = profileDisplays.map((display) => {
         const stableId = display.stableId ?? display.id;
         const layoutDisplay = layoutById.get(stableId);
-        return layoutDisplay ? { ...display, position: layoutDisplay.position } : display;
+        const isPrimary = profile.layout.primaryDisplayStableId
+          ? profile.layout.primaryDisplayStableId === stableId
+          : display.isPrimary;
+        const resolvedScaleOption = layoutDisplay
+          ? resolveScaleOptionForLayoutDisplay(display, layoutDisplay)
+          : null;
+
+        return layoutDisplay
+          ? {
+              ...display,
+              position: layoutDisplay.position,
+              resolution: resolvedScaleOption?.resolution ?? layoutDisplay.resolution,
+              refreshRate: resolvedScaleOption?.refreshRate ?? layoutDisplay.refreshRate,
+              scaleFactor: resolvedScaleOption?.scaleFactor ?? layoutDisplay.scaleFactor,
+              rotation: layoutDisplay.rotation,
+              modeId: resolvedScaleOption?.id ?? layoutDisplay.modeId ?? display.modeId,
+              isPrimary,
+              bounds: {
+                ...display.bounds,
+                width: resolvedScaleOption?.resolution.width ?? layoutDisplay.resolution.width,
+                height: resolvedScaleOption?.resolution.height ?? layoutDisplay.resolution.height,
+              },
+              scaleOptions: display.scaleOptions.map((option) => ({
+                ...option,
+                isCurrent: resolvedScaleOption
+                  ? option.id === resolvedScaleOption.id
+                  : layoutDisplay.modeId
+                    ? option.id === layoutDisplay.modeId
+                    : option.resolution.width === layoutDisplay.resolution.width &&
+                      option.resolution.height === layoutDisplay.resolution.height &&
+                      Math.abs(option.scaleFactor - layoutDisplay.scaleFactor) < 0.01,
+              })),
+            }
+          : { ...display, isPrimary };
       });
 
       return buildNodesForDisplays(patchedDisplays);
@@ -166,7 +214,8 @@ export function App() {
     const canvasNodes = activeProfileId
       ? buildNodesForProfile(displays, activeProfileId)
       : buildNodesForDisplays(displays);
-    setNodes(canvasNodes);
+    const selectedId = selectedDisplayIdRef.current;
+    setNodes(canvasNodes.map((node) => ({ ...node, selected: selectedId === node.id })));
     setDirty(false);
   }, [activeProfileId, buildNodesForDisplays, buildNodesForProfile, displays, setDirty, setNodes]);
 
@@ -178,21 +227,104 @@ export function App() {
   }, [activeProfileId, profiles]);
 
   const selectedDisplay = useMemo(
-    () => displays.find((display) => (display.stableId ?? display.id) === selectedDisplayId) ?? displays[0],
-    [displays, selectedDisplayId],
+    () =>
+      nodes.find((node) => node.id === selectedDisplayId)?.data.display ??
+      nodes[0]?.data.display ??
+      displays[0],
+    [displays, nodes, selectedDisplayId],
   );
 
   const snapGrid = useMemo<[number, number]>(() => [gridSize, gridSize], [gridSize]);
 
   const currentLayout = useCallback(() => {
+    const draftDisplays = nodes.length > 0 ? nodes.map((node) => node.data.display) : displays;
     const positions = Object.fromEntries(
       nodes.map((node) => [
         node.id,
         snapToGrid ? snapPoint(node.position, gridSize) : node.position,
       ]),
     );
-    return nodes.length > 0 ? canvasPositionsToLayout(displays, positions) : displaysToLayout(displays);
+    return nodes.length > 0 ? canvasPositionsToLayout(draftDisplays, positions) : displaysToLayout(displays);
   }, [displays, gridSize, nodes, snapToGrid]);
+
+  const updateDisplayDraft = useCallback(
+    (displayId: string, updater: (display: Display) => Display) => {
+      setNodes((currentNodes) =>
+        currentNodes.map((node) => {
+          if (node.id !== displayId) {
+            return node;
+          }
+
+          const display = updater(node.data.display);
+          return {
+            ...node,
+            data: {
+              ...node.data,
+              ...monitorNodeDimensions(display),
+              display,
+            },
+          };
+        }),
+      );
+      setDirty(true);
+    },
+    [setDirty, setNodes],
+  );
+
+  const handleSetPrimaryDisplay = useCallback(
+    (displayId: string) => {
+      setNodes((currentNodes) =>
+        currentNodes.map((node) => ({
+          ...node,
+          data: {
+            ...node.data,
+            display: {
+              ...node.data.display,
+              isPrimary: node.id === displayId,
+            },
+          },
+        })),
+      );
+      setDirty(true);
+    },
+    [setDirty, setNodes],
+  );
+
+  const handleScaleChange = useCallback(
+    (displayId: string, modeId: string) => {
+      updateDisplayDraft(displayId, (display) => {
+        const option = display.scaleOptions.find((item) => item.id === modeId);
+        if (!option) {
+          return display;
+        }
+
+        return {
+          ...display,
+          modeId: option.id,
+          scaleFactor: option.scaleFactor,
+          resolution: option.resolution,
+          refreshRate: option.refreshRate,
+          bounds: {
+            ...display.bounds,
+            width: option.resolution.width,
+            height: option.resolution.height,
+          },
+          scaleOptions: display.scaleOptions.map((item) => ({
+            ...item,
+            isCurrent: item.id === option.id,
+          })),
+        };
+      });
+    },
+    [updateDisplayDraft],
+  );
+
+  const handleRotationChange = useCallback(
+    (displayId: string, rotation: DisplayRotation) => {
+      updateDisplayDraft(displayId, (display) => ({ ...display, rotation }));
+    },
+    [updateDisplayDraft],
+  );
 
   const handleNodesChange = useCallback(
     (changes: Parameters<typeof onNodesChange>[0]) => {
@@ -207,9 +339,10 @@ export function App() {
   const handleSelectionChange = useCallback(
     ({ nodes: selectedNodes }: { nodes: Node<MonitorNodeData>[] }) => {
       const ids = selectedNodes.map((node) => node.id);
+      const nextId = ids[0] ?? null;
+      selectedDisplayIdRef.current = nextId;
       setSelectedDisplayIds(ids);
       setSelectedDisplayId((currentId) => {
-        const nextId = ids[0] ?? null;
         return currentId === nextId ? currentId : nextId;
       });
     },
@@ -256,7 +389,13 @@ export function App() {
 
     selectProfile(profile.id);
     setProfileName(profile.name);
-    setNodes(buildNodesForProfile(displays, profile.id));
+    const selectedId = selectedDisplayIdRef.current;
+    setNodes(
+      buildNodesForProfile(displays, profile.id).map((node) => ({
+        ...node,
+        selected: selectedId === node.id,
+      })),
+    );
     setDirty(false);
   };
 
@@ -303,6 +442,12 @@ export function App() {
       void unlistenApplyProfile.then((unlisten) => unlisten());
     };
   }, [applyProfile, handleApplyLayout, isNativeApp, refreshDisplays, setDirty]);
+
+  const selectedStableId = selectedDisplay ? selectedDisplay.stableId ?? selectedDisplay.id : null;
+  const selectedScaleValue =
+    selectedDisplay?.modeId ??
+    selectedDisplay?.scaleOptions.find((option) => option.isCurrent)?.id ??
+    "";
 
   return (
     <main className="grid h-screen grid-rows-[48px_minmax(0,1fr)] overflow-hidden bg-zinc-100 text-zinc-950 dark:bg-zinc-950 dark:text-zinc-100">
@@ -516,6 +661,75 @@ export function App() {
               No display selected.
             </p>
           )}
+          {selectedDisplay && selectedStableId ? (
+            <div className="mt-3 space-y-2 border-t border-zinc-200 pt-3 dark:border-zinc-800">
+              <label className="flex items-center justify-between gap-3 rounded border border-zinc-200 bg-white px-2 py-1.5 text-xs dark:border-zinc-800 dark:bg-zinc-900/80">
+                <span className="font-medium text-zinc-700 dark:text-zinc-200">Primary display</span>
+                <input
+                  type="radio"
+                  checked={selectedDisplay.isPrimary}
+                  disabled={!selectedDisplay.capabilities.primary.supported}
+                  onChange={() => handleSetPrimaryDisplay(selectedStableId)}
+                />
+              </label>
+              {!selectedDisplay.capabilities.primary.supported ? (
+                <p className="text-[11px] leading-4 text-zinc-500 dark:text-zinc-400">
+                  {selectedDisplay.capabilities.primary.reason}
+                </p>
+              ) : null}
+
+              <label className="block space-y-1 text-xs">
+                <span className="font-medium text-zinc-700 dark:text-zinc-200">Scale</span>
+                <select
+                  className={fieldInput}
+                  value={selectedScaleValue}
+                  disabled={
+                    !selectedDisplay.capabilities.scale.supported ||
+                    selectedDisplay.scaleOptions.length === 0
+                  }
+                  onChange={(event) => handleScaleChange(selectedStableId, event.target.value)}
+                >
+                  {selectedDisplay.scaleOptions.length > 0 ? (
+                    selectedDisplay.scaleOptions.map((option) => (
+                      <option key={option.id} value={option.id}>
+                        {option.label}
+                      </option>
+                    ))
+                  ) : (
+                    <option value="">No scale options</option>
+                  )}
+                </select>
+              </label>
+              {!selectedDisplay.capabilities.scale.supported ? (
+                <p className="text-[11px] leading-4 text-zinc-500 dark:text-zinc-400">
+                  {selectedDisplay.capabilities.scale.reason}
+                </p>
+              ) : null}
+
+              <label className="block space-y-1 text-xs">
+                <span className="font-medium text-zinc-700 dark:text-zinc-200">Rotation</span>
+                <select
+                  className={fieldInput}
+                  value={selectedDisplay.rotation}
+                  disabled={!selectedDisplay.capabilities.rotation.supported}
+                  onChange={(event) =>
+                    handleRotationChange(selectedStableId, Number(event.target.value) as DisplayRotation)
+                  }
+                >
+                  {[0, 90, 180, 270].map((rotation) => (
+                    <option key={rotation} value={rotation}>
+                      {rotation}°
+                    </option>
+                  ))}
+                </select>
+              </label>
+              {!selectedDisplay.capabilities.rotation.supported ? (
+                <p className="text-[11px] leading-4 text-zinc-500 dark:text-zinc-400">
+                  {selectedDisplay.capabilities.rotation.reason}
+                </p>
+              ) : null}
+            </div>
+          ) : null}
           {displayError || profileError ? (
             <p className="mt-3 rounded border border-red-200 bg-red-50 p-2 text-xs leading-5 text-red-700 dark:border-red-900/60 dark:bg-red-950/50 dark:text-red-200">
               {displayError ?? profileError}
