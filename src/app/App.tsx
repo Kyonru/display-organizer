@@ -9,7 +9,7 @@ import {
   useEdgesState,
   useNodesState,
 } from "@xyflow/react";
-import { Copy, Monitor, Plus, RefreshCcw, Save, Trash2, Zap } from "lucide-react";
+import { Copy, Monitor, Moon, Plus, RefreshCcw, Save, Sun, Trash2, Zap } from "lucide-react";
 import { clsx } from "clsx";
 import { useCanvasStore } from "../features/canvas/canvasStore";
 import {
@@ -28,6 +28,17 @@ type MonitorNodeData = {
   width: number;
   height: number;
 };
+
+type Theme = "light" | "dark";
+
+const buttonBase =
+  "inline-flex h-8 items-center justify-center gap-1.5 rounded border border-zinc-200 bg-white px-2.5 text-xs font-medium text-zinc-700 transition hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-45 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-200 dark:hover:bg-zinc-800";
+
+const iconButton =
+  "inline-flex h-7 w-7 items-center justify-center rounded border border-zinc-200 bg-white text-zinc-500 transition hover:bg-zinc-50 hover:text-zinc-900 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-zinc-100";
+
+const primaryButton =
+  "inline-flex h-8 items-center justify-center gap-1.5 rounded border border-emerald-600 bg-emerald-600 px-2.5 text-xs font-semibold text-white transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-45";
 
 function MonitorNode({ data, selected }: NodeProps<Node<MonitorNodeData>>) {
   const display = data.display;
@@ -60,6 +71,18 @@ const nodeTypes = {
 
 export function App() {
   const isNativeApp = isTauriRuntime();
+  const [theme, setTheme] = useState<Theme>(() => {
+    if (typeof window === "undefined") {
+      return "light";
+    }
+
+    const storedTheme = window.localStorage.getItem("display-layout-manager.theme");
+    if (storedTheme === "light" || storedTheme === "dark") {
+      return storedTheme;
+    }
+
+    return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+  });
   const { displays, isRefreshing, error: displayError, refreshDisplays } = useDisplayStore();
   const {
     profiles,
@@ -82,6 +105,11 @@ export function App() {
   const [edges, , onEdgesChange] = useEdgesState([]);
   const [selectedDisplayId, setSelectedDisplayId] = useState<string | null>(null);
   const [profileName, setProfileName] = useState("Work Desk");
+
+  useEffect(() => {
+    document.documentElement.classList.toggle("dark", theme === "dark");
+    window.localStorage.setItem("display-layout-manager.theme", theme);
+  }, [theme]);
 
   const buildNodesForDisplays = useCallback(
     (displayList: Display[]) =>
@@ -233,81 +261,110 @@ export function App() {
   };
 
   return (
-    <main className="app-shell">
-      <header className="top-bar">
-        <div>
-          <h1>Display Layout Manager</h1>
-          <p>
-            {displays.length} display{displays.length === 1 ? "" : "s"} connected
+    <main className="grid h-screen grid-rows-[48px_minmax(0,1fr)] overflow-hidden bg-zinc-100 text-zinc-950 dark:bg-zinc-950 dark:text-zinc-100">
+      <header className="flex min-w-0 items-center justify-between gap-3 border-b border-zinc-200 bg-white px-3 dark:border-zinc-800 dark:bg-zinc-950">
+        <div className="min-w-0">
+          <h1 className="truncate text-sm font-semibold leading-5">Display Layout Manager</h1>
+          <p className="truncate text-[11px] text-zinc-500 dark:text-zinc-400">
+            {displays.length} display{displays.length === 1 ? "" : "s"}
             {!isNativeApp ? " · browser preview" : ""}
+            {isDirty ? " · unsaved" : ""}
           </p>
         </div>
-        <div className="toolbar">
-          <label className="profile-name-field">
-            <span>Profile</span>
+        <div className="flex min-w-0 items-center gap-1.5">
+          <label className="flex h-8 items-center gap-2 rounded border border-zinc-200 bg-zinc-50 pl-2 pr-1.5 text-[11px] text-zinc-500 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-400">
+            <span className="shrink-0 uppercase tracking-wide">Profile</span>
             <input
+              className="h-6 w-36 rounded border border-zinc-200 bg-white px-2 text-xs text-zinc-900 outline-none transition placeholder:text-zinc-400 focus:border-emerald-500 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-100"
               value={profileName}
               onChange={(event) => setProfileName(event.target.value)}
               placeholder="Profile name"
             />
           </label>
-          <button type="button" onClick={() => void refreshDisplays()} disabled={isRefreshing}>
+          <button className={buttonBase} type="button" onClick={() => void refreshDisplays()} disabled={isRefreshing}>
             <RefreshCcw size={16} />
             Refresh
           </button>
-          <button type="button" onClick={() => void handleAddProfile()} disabled={displays.length === 0}>
+          <button className={buttonBase} type="button" onClick={() => void handleAddProfile()} disabled={displays.length === 0}>
             <Plus size={16} />
-            Add Profile
+            Add
           </button>
           <button
+            className={buttonBase}
             type="button"
             onClick={() => void handleSaveProfile()}
             disabled={displays.length === 0 || !activeProfileId}
           >
             <Save size={16} />
-            Save Changes
+            Save
           </button>
           <button
             type="button"
-            className="primary-action"
+            className={primaryButton}
             onClick={() => void handleApplyLayout()}
             disabled={displays.length === 0 || isApplying}
           >
             <Zap size={16} />
-            Apply Layout
+            Apply
+          </button>
+          <button
+            type="button"
+            className={iconButton}
+            aria-label={`Switch to ${theme === "dark" ? "light" : "dark"} mode`}
+            onClick={() => setTheme((currentTheme) => (currentTheme === "dark" ? "light" : "dark"))}
+          >
+            {theme === "dark" ? <Sun size={15} /> : <Moon size={15} />}
           </button>
         </div>
       </header>
 
-      <section className="workspace">
-        <aside className="profile-sidebar">
-          <div className="panel-heading">
-            <h2>Profiles</h2>
-            <span>{profiles.length}</span>
+      <section className="grid min-h-0 grid-cols-[240px_minmax(0,1fr)_260px]">
+        <aside className="min-h-0 overflow-auto border-r border-zinc-200 bg-zinc-50/80 p-3 dark:border-zinc-800 dark:bg-zinc-950">
+          <div className="mb-2 flex items-center justify-between">
+            <h2 className="text-xs font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">Profiles</h2>
+            <span className="rounded bg-zinc-200 px-1.5 py-0.5 text-[10px] font-medium text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300">
+              {profiles.length}
+            </span>
           </div>
-          <div className="profile-list">
+          <div className="space-y-1.5">
             {profiles.length === 0 ? (
-              <p className="empty-state">Use Add Profile to save the current arrangement.</p>
+              <p className="rounded border border-dashed border-zinc-300 p-2 text-xs leading-5 text-zinc-500 dark:border-zinc-800 dark:text-zinc-400">
+                Use Add to save the current arrangement.
+              </p>
             ) : null}
             {profiles.map((profile) => (
               <article
                 key={profile.id}
-                className={clsx("profile-row", activeProfileId === profile.id && "profile-row-active")}
+                className={clsx(
+                  "group flex items-start gap-2 rounded border p-2 transition",
+                  activeProfileId === profile.id
+                    ? "border-emerald-500 bg-emerald-50 ring-1 ring-emerald-500/20 dark:bg-emerald-950/30"
+                    : "border-zinc-200 bg-white hover:border-zinc-300 dark:border-zinc-800 dark:bg-zinc-900/70 dark:hover:border-zinc-700",
+                )}
               >
                 <button
                   type="button"
-                  className="profile-main"
+                  className="min-w-0 flex-1 text-left"
                   onClick={() => handleOpenProfile(profile.id)}
                 >
-                  <strong>{profile.name}</strong>
-                  <span>
+                  <span className="flex min-w-0 items-center gap-1.5">
+                    <strong className="truncate text-xs font-semibold text-zinc-900 dark:text-zinc-100">
+                      {profile.name}
+                    </strong>
+                    {activeProfileId === profile.id ? (
+                      <span className="shrink-0 rounded bg-emerald-100 px-1.5 py-0.5 text-[9px] font-bold uppercase text-emerald-700 dark:bg-emerald-900 dark:text-emerald-200">
+                        Open
+                      </span>
+                    ) : null}
+                  </span>
+                  <span className="mt-0.5 block truncate text-[11px] text-zinc-500 dark:text-zinc-400">
                     {profile.layout.displays.length} displays
-                    {activeProfileId === profile.id ? " · open" : ""}
                   </span>
                 </button>
-                <div className="profile-actions">
+                <div className="flex shrink-0 gap-1">
                   <button
                     type="button"
+                    className={iconButton}
                     aria-label={`Apply ${profile.name}`}
                     onClick={(event) => {
                       event.stopPropagation();
@@ -323,6 +380,7 @@ export function App() {
                   </button>
                   <button
                     type="button"
+                    className={iconButton}
                     aria-label={`Duplicate ${profile.name}`}
                     onClick={(event) => {
                       event.stopPropagation();
@@ -333,6 +391,7 @@ export function App() {
                   </button>
                   <button
                     type="button"
+                    className={iconButton}
                     aria-label={`Delete ${profile.name}`}
                     onClick={(event) => {
                       event.stopPropagation();
@@ -347,26 +406,13 @@ export function App() {
                   >
                     <Trash2 size={14} />
                   </button>
-                  <button
-                    type="button"
-                    aria-label={`Rename ${profile.name} from name field`}
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      const name = profileName.trim();
-                      if (name && activeProfileId === profile.id) {
-                        void renameProfile(profile.id, name);
-                      }
-                    }}
-                  >
-                    <Save size={14} />
-                  </button>
                 </div>
               </article>
             ))}
           </div>
         </aside>
 
-        <section className="canvas-panel">
+        <section className="min-h-0 min-w-0 bg-zinc-100 dark:bg-zinc-950">
           <ReactFlow
             nodes={nodes}
             edges={edges}
@@ -376,45 +422,66 @@ export function App() {
             onSelectionChange={handleSelectionChange}
             snapToGrid={snapToGrid}
             snapGrid={snapGrid}
-            minZoom={0.25}
-            maxZoom={2}
+            minZoom={0.15}
+            maxZoom={2.5}
+            colorMode={theme}
             fitView
           >
-            <Background gap={gridSize} />
-            <MiniMap pannable zoomable />
+            <Background gap={gridSize} color={theme === "dark" ? "#3f3f46" : "#d4d4d8"} />
+            <MiniMap
+              pannable
+              zoomable
+              maskColor={theme === "dark" ? "rgb(9 9 11 / 0.68)" : "rgb(244 244 245 / 0.68)"}
+              nodeColor={theme === "dark" ? "#10b981" : "#047857"}
+              nodeStrokeWidth={2}
+            />
             <Controls />
           </ReactFlow>
         </section>
 
-        <aside className="inspector">
-          <div className="panel-heading">
-            <h2>Display</h2>
-            {isDirty ? <span className="dirty-badge">Unsaved</span> : null}
+        <aside className="min-h-0 overflow-auto border-l border-zinc-200 bg-zinc-50/80 p-3 dark:border-zinc-800 dark:bg-zinc-950">
+          <div className="mb-2 flex items-center justify-between gap-2">
+            <h2 className="text-xs font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">Display</h2>
+            {isDirty ? (
+              <span className="rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-medium text-amber-700 dark:bg-amber-900/50 dark:text-amber-200">
+                Unsaved
+              </span>
+            ) : null}
           </div>
           {selectedDisplay ? (
-            <dl>
-              <dt>Name</dt>
-              <dd>{selectedDisplay.name}</dd>
-              <dt>Resolution</dt>
-              <dd>
+            <dl className="grid grid-cols-[76px_minmax(0,1fr)] gap-x-2 gap-y-1.5 text-xs">
+              <dt className="text-zinc-500 dark:text-zinc-400">Name</dt>
+              <dd className="min-w-0 truncate">{selectedDisplay.name}</dd>
+              <dt className="text-zinc-500 dark:text-zinc-400">Resolution</dt>
+              <dd className="min-w-0 truncate">
                 {selectedDisplay.resolution.width} x {selectedDisplay.resolution.height}
               </dd>
-              <dt>Position</dt>
-              <dd>
+              <dt className="text-zinc-500 dark:text-zinc-400">Position</dt>
+              <dd className="min-w-0 truncate">
                 {selectedDisplay.position.x}, {selectedDisplay.position.y}
               </dd>
-              <dt>Scale</dt>
+              <dt className="text-zinc-500 dark:text-zinc-400">Scale</dt>
               <dd>{selectedDisplay.scaleFactor.toFixed(2)}x</dd>
-              <dt>Rotation</dt>
+              <dt className="text-zinc-500 dark:text-zinc-400">Rotation</dt>
               <dd>{selectedDisplay.rotation}°</dd>
-              <dt>Identifier</dt>
-              <dd>{selectedDisplay.stableId ?? selectedDisplay.id}</dd>
+              <dt className="text-zinc-500 dark:text-zinc-400">Identifier</dt>
+              <dd className="min-w-0 break-all">{selectedDisplay.stableId ?? selectedDisplay.id}</dd>
             </dl>
           ) : (
-            <p className="empty-state">No display selected.</p>
+            <p className="rounded border border-dashed border-zinc-300 p-2 text-xs leading-5 text-zinc-500 dark:border-zinc-800 dark:text-zinc-400">
+              No display selected.
+            </p>
           )}
-          {displayError || profileError ? <p className="error-text">{displayError ?? profileError}</p> : null}
-          {lastApplyResult ? <p className="success-text">{lastApplyResult.message}</p> : null}
+          {displayError || profileError ? (
+            <p className="mt-3 rounded border border-red-200 bg-red-50 p-2 text-xs leading-5 text-red-700 dark:border-red-900/60 dark:bg-red-950/50 dark:text-red-200">
+              {displayError ?? profileError}
+            </p>
+          ) : null}
+          {lastApplyResult ? (
+            <p className="mt-3 rounded border border-emerald-200 bg-emerald-50 p-2 text-xs leading-5 text-emerald-700 dark:border-emerald-900/60 dark:bg-emerald-950/50 dark:text-emerald-200">
+              {lastApplyResult.message}
+            </p>
+          ) : null}
         </aside>
       </section>
     </main>
