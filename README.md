@@ -149,6 +149,8 @@ Rules can add conditions for platform, connected displays, display count, intern
 
 The native automation monitor checks local context every 15 seconds and emits matches to the UI. When multiple rules match, the app shows choices instead of preselecting one. Saved Profile Actions run when the matched profile applies successfully.
 
+Local notifications are available for confirmation-required automation matches. They are enabled by default, appear even when the app is focused, and clicking the `Open` notification action focuses Display Layout Manager so the existing automation prompt can be reviewed. In macOS dev runs, Notification Center may list the sender under a system fallback app because the dev binary is not a bundled `.app`; packaged builds use Display Layout Manager's bundle identity.
+
 ### Recovery
 
 After applying a layout, the app shows a 20-second recovery banner:
@@ -169,7 +171,6 @@ The Diagnostics button exports a local JSON bundle and shows a toast when the do
 - Profile summaries
 - Profile action counts, action types, and app names
 - Automation rules, trigger/condition summaries, and recent events
-- Recent automation events
 - Current recovery state when present
 
 Diagnostics hash display stable ids and Wi-Fi SSIDs, and do not export serial numbers, raw EDID, or script commands by default.

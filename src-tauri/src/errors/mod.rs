@@ -9,6 +9,8 @@ pub enum AppError {
     ProfileNotFound(String),
     #[error("validation error: {0}")]
     Validation(String),
+    #[error("notification error: {0}")]
+    Notification(String),
     #[error("storage error: {0}")]
     Storage(String),
 }

@@ -198,6 +198,64 @@ pub fn record_automation_event(
 }
 
 #[tauri::command]
+pub fn send_local_notification(
+    app: tauri::AppHandle,
+    title: String,
+    body: String,
+) -> Result<(), AppError> {
+    let title = title.trim();
+    let body = body.trim();
+
+    if title.is_empty() {
+        return Err(AppError::Validation(
+            "notification title cannot be empty".to_string(),
+        ));
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        let product_name = app
+            .config()
+            .product_name
+            .clone()
+            .unwrap_or_else(|| "Display Layout Manager".to_string());
+        let running_from_app_bundle = std::env::current_exe()
+            .ok()
+            .map(|path| {
+                path.ancestors().any(|ancestor| {
+                    ancestor
+                        .extension()
+                        .is_some_and(|extension| extension.to_string_lossy() == "app")
+                })
+            })
+            .unwrap_or(false);
+        let bundle_identifier = if running_from_app_bundle {
+            app.config().identifier.clone()
+        } else {
+            notify_rust::get_bundle_identifier_or_default(&product_name)
+        };
+        let _ = notify_rust::set_application(&bundle_identifier);
+    }
+
+    let mut notification = notify_rust::Notification::new();
+    notification
+        .summary(title)
+        .body(body)
+        .appname("Display Layout Manager");
+
+    #[cfg(target_os = "macos")]
+    notification.sound_name("Ping");
+
+    #[cfg(windows)]
+    notification.app_id(&app.config().identifier);
+
+    notification
+        .show()
+        .map(|_| ())
+        .map_err(|error| AppError::Notification(error.to_string()))
+}
+
+#[tauri::command]
 pub fn get_recovery_state() -> Result<Option<RecoveryState>, AppError> {
     beta_repository::get_recovery_state()
 }

@@ -421,11 +421,29 @@ impl Default for ProfileActionSettings {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct AutomationNotificationSettings {
+    pub enabled: bool,
+    pub hidden_only: bool,
+}
+
+impl Default for AutomationNotificationSettings {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            hidden_only: true,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct AppSettings {
     #[serde(default)]
     pub profile_actions: ProfileActionSettings,
+    #[serde(default)]
+    pub automation_notifications: AutomationNotificationSettings,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

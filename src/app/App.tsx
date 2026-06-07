@@ -35,6 +35,10 @@ import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
 import { clsx } from "clsx";
 import {
+  maybeSendAutomationNotification,
+  registerAutomationNotificationActionHandler,
+} from "../features/automation/automationNotifications";
+import {
   automationRuleToDraft,
   conditionLabel,
   cooldownLabel,
@@ -105,6 +109,44 @@ const primaryButton =
 
 const fieldInput =
   "h-8 w-full rounded border border-zinc-200 bg-white px-2 text-xs text-zinc-900 outline-none transition focus:border-emerald-500 disabled:cursor-not-allowed disabled:opacity-55 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-100";
+
+type TimeScheduleTrigger = Extract<AutomationTrigger, { type: "time_schedule" }>;
+
+const timeTextInputProps = {
+  inputMode: "numeric" as const,
+  maxLength: 5,
+  pattern: "([01][0-9]|2[0-3]):[0-5][0-9]",
+};
+
+function sanitizeTimeText(value: string) {
+  const normalized = value.replace(/[^\d:]/g, "").replace(/:{2,}/g, ":");
+  const [hours = "", minutes = ""] = normalized.split(":");
+
+  if (normalized.includes(":")) {
+    return `${hours.slice(0, 2)}:${minutes.slice(0, 2)}`.slice(0, 5);
+  }
+
+  const digits = normalized.slice(0, 4);
+  return digits.length > 2 ? `${digits.slice(0, 2)}:${digits.slice(2)}` : digits;
+}
+
+function normalizeTimeText(value: string) {
+  const sanitized = sanitizeTimeText(value);
+  const [rawHours = "", rawMinutes = ""] = sanitized.split(":");
+
+  if (!rawHours) {
+    return "";
+  }
+
+  const hours = Math.min(23, Math.max(0, Number(rawHours) || 0));
+  const minutes = Math.min(59, Math.max(0, Number(rawMinutes) || 0));
+
+  return `${hours.toString().padStart(2, "0")}:${minutes.toString().padStart(2, "0")}`;
+}
+
+function timeScheduleMode(trigger: TimeScheduleTrigger) {
+  return trigger.exactTime || (!trigger.startTime && !trigger.endTime) ? "exact" : "window";
+}
 
 function MonitorNode({ data, selected }: NodeProps<Node<MonitorNodeData>>) {
   const display = data.display;
@@ -180,6 +222,7 @@ export function App() {
     error: settingsError,
     loadSettings,
     setScriptsEnabled,
+    setAutomationNotificationsEnabled,
   } = useSettingsStore();
   const { gridSize, snapToGrid, setDirty, isDirty, setSelectedDisplayIds } = useCanvasStore();
   const {
@@ -206,11 +249,13 @@ export function App() {
   const selectedDisplayIdRef = useRef<string | null>(null);
   const automationPromptSignatureRef = useRef<string | null>(null);
   const automationAutoSignatureRef = useRef<string | null>(null);
+  const notifiedAutomationSignaturesRef = useRef<Set<string>>(new Set());
   const [profileName, setProfileName] = useState("Work Desk");
   const [profileActions, setProfileActions] = useState<ProfileAction[]>([]);
   const [automationDraft, setAutomationDraft] = useState<AutomationRuleDraft | null>(null);
   const [recoverySecondsRemaining, setRecoverySecondsRemaining] = useState(0);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const [notificationPermissionDenied, setNotificationPermissionDenied] = useState(false);
 
   useEffect(() => {
     document.documentElement.classList.toggle("dark", theme === "dark");
@@ -226,6 +271,25 @@ export function App() {
       console.error("Failed to show menu bar icon", error);
     });
   }, [activeProfileId, isNativeApp, profiles]);
+
+  useEffect(() => {
+    if (!isNativeApp) {
+      return;
+    }
+
+    let listener: { unregister: () => Promise<void> } | null = null;
+    void registerAutomationNotificationActionHandler()
+      .then((registeredListener) => {
+        listener = registeredListener;
+      })
+      .catch((error) => {
+        console.error("Failed to register automation notification action", error);
+      });
+
+    return () => {
+      void listener?.unregister();
+    };
+  }, [isNativeApp]);
 
   const buildNodesForDisplays = useCallback(
     (displayList: Display[]) =>
@@ -310,16 +374,22 @@ export function App() {
       return;
     }
 
+    const expiresAtMs = new Date(recoveryState.expiresAt).getTime();
     const updateRemaining = () => {
-      setRecoverySecondsRemaining(
-        Math.max(0, Math.ceil((new Date(recoveryState.expiresAt).getTime() - Date.now()) / 1000)),
-      );
+      setRecoverySecondsRemaining(Math.max(0, Math.ceil((expiresAtMs - Date.now()) / 1000)));
     };
 
     updateRemaining();
     const interval = window.setInterval(updateRemaining, 1000);
-    return () => window.clearInterval(interval);
-  }, [recoveryState]);
+    const timeout = window.setTimeout(() => {
+      void keepRecovery();
+    }, Math.max(0, expiresAtMs - Date.now()));
+
+    return () => {
+      window.clearInterval(interval);
+      window.clearTimeout(timeout);
+    };
+  }, [keepRecovery, recoveryState]);
 
   useEffect(() => {
     if (!toastMessage) {
@@ -434,6 +504,28 @@ export function App() {
     refreshDisplays,
     setDirty,
   ]);
+
+  useEffect(() => {
+    if (!automationEvaluation) {
+      return;
+    }
+
+    void maybeSendAutomationNotification({
+      evaluation: automationEvaluation,
+      settings,
+      isNative: isNativeApp,
+      notifiedSignatures: notifiedAutomationSignaturesRef.current,
+    })
+      .then((result) => {
+        setNotificationPermissionDenied(result === "permission denied");
+        if (result.startsWith("notification error:")) {
+          setToastMessage(result);
+        }
+      })
+      .catch((error) => {
+        console.error("Failed to send automation notification", error);
+      });
+  }, [automationEvaluation, isNativeApp, settings]);
 
   useEffect(() => {
     const canvasNodes = activeProfileId
@@ -1086,7 +1178,7 @@ export function App() {
         </div>
       </header>
 
-      <section className="grid min-h-0 grid-cols-[240px_minmax(0,1fr)_340px]">
+      <section className="grid min-h-0 grid-cols-[300px_minmax(0,1fr)_340px]">
         <aside className="min-h-0 overflow-auto border-r border-zinc-200 bg-zinc-50/80 p-3 dark:border-zinc-800 dark:bg-zinc-950">
           <div className="mb-2 flex items-center justify-between">
             <h2 className="text-xs font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">Profiles</h2>
@@ -1185,6 +1277,14 @@ export function App() {
                 Automation
               </h2>
               <div className="flex gap-1">
+                <label className="flex h-7 items-center gap-1.5 rounded border border-zinc-200 bg-white px-2 text-[11px] font-medium text-zinc-600 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-300">
+                  <input
+                    type="checkbox"
+                    checked={settings.automationNotifications.enabled}
+                    onChange={(event) => void setAutomationNotificationsEnabled(event.target.checked)}
+                  />
+                  Notify
+                </label>
                 <button
                   type="button"
                   className={iconButton}
@@ -1204,16 +1304,21 @@ export function App() {
                 </button>
               </div>
             </div>
+            {notificationPermissionDenied && settings.automationNotifications.enabled ? (
+              <p className="mb-2 rounded border border-amber-200 bg-amber-50 px-2 py-1.5 text-[11px] leading-4 text-amber-800 dark:border-amber-900/60 dark:bg-amber-950/50 dark:text-amber-100">
+                Notifications are blocked in macOS. Enable them in System Settings to receive automation alerts.
+              </p>
+            ) : null}
 
             {automationDraft ? (
-              <div className="space-y-2 rounded border border-zinc-200 bg-white p-2 text-xs dark:border-zinc-800 dark:bg-zinc-900/70">
+              <div className="space-y-2.5 rounded border border-zinc-200 bg-white p-2.5 text-xs dark:border-zinc-800 dark:bg-zinc-900/70">
                 <input
                   className={fieldInput}
                   value={automationDraft.name}
                   onChange={(event) => updateAutomationDraft((draft) => ({ ...draft, name: event.target.value }))}
                   placeholder="Rule name"
                 />
-                <div className="grid grid-cols-2 gap-1.5">
+                <div className="space-y-1.5">
                   <select
                     className={fieldInput}
                     value={automationDraft.profileId}
@@ -1225,19 +1330,34 @@ export function App() {
                       </option>
                     ))}
                   </select>
-                  <select
-                    className={fieldInput}
-                    value={automationDraft.confirmationMode ?? "confirm"}
-                    onChange={(event) =>
-                      updateAutomationDraft((draft) => ({
-                        ...draft,
-                        confirmationMode: event.target.value === "auto" ? "auto" : "confirm",
-                      }))
-                    }
-                  >
-                    <option value="confirm">Confirm</option>
-                    <option value="auto">Auto</option>
-                  </select>
+                  <div className="grid grid-cols-2 gap-1.5">
+                    <select
+                      className={fieldInput}
+                      value={automationDraft.confirmationMode ?? "confirm"}
+                      onChange={(event) =>
+                        updateAutomationDraft((draft) => ({
+                          ...draft,
+                          confirmationMode: event.target.value === "auto" ? "auto" : "confirm",
+                        }))
+                      }
+                    >
+                      <option value="confirm">Confirm</option>
+                      <option value="auto">Auto</option>
+                    </select>
+                    <select
+                      className={fieldInput}
+                      value={automationDraft.cooldownMs ?? 600_000}
+                      onChange={(event) =>
+                        updateAutomationDraft((draft) => ({ ...draft, cooldownMs: Number(event.target.value) }))
+                      }
+                    >
+                      <option value={0}>No cooldown</option>
+                      <option value={60_000}>1 min</option>
+                      <option value={300_000}>5 min</option>
+                      <option value={600_000}>10 min</option>
+                      <option value={1_800_000}>30 min</option>
+                    </select>
+                  </div>
                   <label className="flex h-8 items-center gap-2 rounded border border-zinc-200 bg-zinc-50 px-2 dark:border-zinc-800 dark:bg-zinc-950">
                     <input
                       type="checkbox"
@@ -1246,19 +1366,6 @@ export function App() {
                     />
                     Enabled
                   </label>
-                  <select
-                    className={fieldInput}
-                    value={automationDraft.cooldownMs ?? 600_000}
-                    onChange={(event) =>
-                      updateAutomationDraft((draft) => ({ ...draft, cooldownMs: Number(event.target.value) }))
-                    }
-                  >
-                    <option value={0}>No cooldown</option>
-                    <option value={60_000}>1 min</option>
-                    <option value={300_000}>5 min</option>
-                    <option value={600_000}>10 min</option>
-                    <option value={1_800_000}>30 min</option>
-                  </select>
                 </div>
 
                 <div>
@@ -1267,7 +1374,7 @@ export function App() {
                       Triggers
                     </strong>
                   </div>
-                  <div className="mb-1.5 grid grid-cols-3 gap-1">
+                  <div className="mb-2 grid grid-cols-2 gap-1.5">
                     {([
                       ["display_setup_changed", Monitor, "Display"],
                       ["time_schedule", Clock, "Time"],
@@ -1287,10 +1394,10 @@ export function App() {
                       </button>
                     ))}
                   </div>
-                  <div className="space-y-1.5">
+                  <div className="space-y-2">
                     {(automationDraft.triggers ?? []).map((trigger, index) => (
-                      <article key={`${trigger.type}-${index}`} className="rounded border border-zinc-200 bg-zinc-50 p-1.5 dark:border-zinc-800 dark:bg-zinc-950">
-                        <div className="mb-1 flex items-center gap-1.5">
+                      <article key={`${trigger.type}-${index}`} className="rounded border border-zinc-200 bg-zinc-50 p-2 dark:border-zinc-800 dark:bg-zinc-950">
+                        <div className="mb-1.5 flex items-center gap-1.5">
                           <strong className="min-w-0 flex-1 truncate text-zinc-700 dark:text-zinc-200">
                             {triggerLabel(trigger)}
                           </strong>
@@ -1304,7 +1411,7 @@ export function App() {
                           </button>
                         </div>
                         {trigger.type === "display_setup_changed" ? (
-                          <div className="grid grid-cols-2 gap-1">
+                          <div className="space-y-1.5">
                             <input
                               className={fieldInput}
                               type="number"
@@ -1340,47 +1447,134 @@ export function App() {
                           </div>
                         ) : null}
                         {trigger.type === "time_schedule" ? (
-                          <div className="grid grid-cols-3 gap-1">
-                            <input
-                              className={fieldInput}
-                              type="time"
-                              value={trigger.exactTime ?? ""}
-                              onChange={(event) =>
-                                handleUpdateAutomationTrigger(index, (current) =>
-                                  current.type === "time_schedule"
-                                    ? { ...current, exactTime: event.target.value || null }
-                                    : current,
-                                )
-                              }
-                            />
-                            <input
-                              className={fieldInput}
-                              type="time"
-                              value={trigger.startTime ?? ""}
-                              onChange={(event) =>
-                                handleUpdateAutomationTrigger(index, (current) =>
-                                  current.type === "time_schedule"
-                                    ? { ...current, startTime: event.target.value || null, exactTime: null }
-                                    : current,
-                                )
-                              }
-                            />
-                            <input
-                              className={fieldInput}
-                              type="time"
-                              value={trigger.endTime ?? ""}
-                              onChange={(event) =>
-                                handleUpdateAutomationTrigger(index, (current) =>
-                                  current.type === "time_schedule"
-                                    ? { ...current, endTime: event.target.value || null, exactTime: null }
-                                    : current,
-                                )
-                              }
-                            />
-                          </div>
+                          (() => {
+                            const mode = timeScheduleMode(trigger);
+
+                            return (
+                              <div className="space-y-1.5">
+                                <select
+                                  className={fieldInput}
+                                  value={mode}
+                                  onChange={(event) =>
+                                    handleUpdateAutomationTrigger(index, (current) => {
+                                      if (current.type !== "time_schedule") {
+                                        return current;
+                                      }
+
+                                      if (event.target.value === "exact") {
+                                        return {
+                                          ...current,
+                                          exactTime: current.exactTime ?? current.startTime ?? "09:00",
+                                          startTime: null,
+                                          endTime: null,
+                                        };
+                                      }
+
+                                      return {
+                                        ...current,
+                                        exactTime: null,
+                                        startTime: current.startTime ?? current.exactTime ?? "09:00",
+                                        endTime: current.endTime ?? "17:00",
+                                      };
+                                    })
+                                  }
+                                >
+                                  <option value="exact">At time</option>
+                                  <option value="window">Time window</option>
+                                </select>
+                                {mode === "exact" ? (
+                                  <input
+                                    className={fieldInput}
+                                    type="text"
+                                    {...timeTextInputProps}
+                                    value={trigger.exactTime ?? ""}
+                                    onChange={(event) =>
+                                      handleUpdateAutomationTrigger(index, (current) =>
+                                        current.type === "time_schedule"
+                                          ? {
+                                              ...current,
+                                              exactTime: sanitizeTimeText(event.target.value) || null,
+                                              startTime: null,
+                                              endTime: null,
+                                            }
+                                          : current,
+                                      )
+                                    }
+                                    onBlur={(event) =>
+                                      handleUpdateAutomationTrigger(index, (current) =>
+                                        current.type === "time_schedule"
+                                          ? { ...current, exactTime: normalizeTimeText(event.target.value) || null }
+                                          : current,
+                                      )
+                                    }
+                                    placeholder="HH:mm"
+                                    aria-label="Exact time in 24-hour HH:mm format"
+                                  />
+                                ) : (
+                                  <div className="space-y-1.5">
+                                    <input
+                                      className={fieldInput}
+                                      type="text"
+                                      {...timeTextInputProps}
+                                      value={trigger.startTime ?? ""}
+                                      onChange={(event) =>
+                                        handleUpdateAutomationTrigger(index, (current) =>
+                                          current.type === "time_schedule"
+                                            ? {
+                                                ...current,
+                                                startTime: sanitizeTimeText(event.target.value) || null,
+                                                exactTime: null,
+                                              }
+                                            : current,
+                                      )
+                                    }
+                                      onBlur={(event) =>
+                                        handleUpdateAutomationTrigger(index, (current) =>
+                                          current.type === "time_schedule"
+                                            ? { ...current, startTime: normalizeTimeText(event.target.value) || null }
+                                            : current,
+                                        )
+                                      }
+                                      placeholder="Start HH:mm"
+                                      aria-label="Start time in 24-hour HH:mm format"
+                                    />
+                                    <input
+                                      className={fieldInput}
+                                      type="text"
+                                      {...timeTextInputProps}
+                                      value={trigger.endTime ?? ""}
+                                      onChange={(event) =>
+                                        handleUpdateAutomationTrigger(index, (current) =>
+                                          current.type === "time_schedule"
+                                            ? {
+                                                ...current,
+                                                endTime: sanitizeTimeText(event.target.value) || null,
+                                                exactTime: null,
+                                              }
+                                            : current,
+                                      )
+                                    }
+                                      onBlur={(event) =>
+                                        handleUpdateAutomationTrigger(index, (current) =>
+                                          current.type === "time_schedule"
+                                            ? { ...current, endTime: normalizeTimeText(event.target.value) || null }
+                                            : current,
+                                        )
+                                      }
+                                      placeholder="End HH:mm"
+                                      aria-label="End time in 24-hour HH:mm format"
+                                    />
+                                  </div>
+                                )}
+                                <p className="text-[10px] leading-4 text-zinc-500 dark:text-zinc-400">
+                                  24-hour format, for example 09:00 or 17:30.
+                                </p>
+                              </div>
+                            );
+                          })()
                         ) : null}
                         {trigger.type === "app_event" ? (
-                          <div className="grid grid-cols-[minmax(0,1fr)_96px] gap-1">
+                          <div className="space-y-1.5">
                             <input
                               className={fieldInput}
                               value={trigger.appName}
@@ -1442,7 +1636,7 @@ export function App() {
                           </select>
                         ) : null}
                         {trigger.type === "network_context" ? (
-                          <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-1">
+                          <div className="space-y-1.5">
                             <input
                               className={fieldInput}
                               value={trigger.ssid}
@@ -1453,7 +1647,7 @@ export function App() {
                               }
                               placeholder="Wi-Fi SSID"
                             />
-                            <label className="flex h-8 items-center gap-1 rounded border border-zinc-200 bg-white px-2 dark:border-zinc-800 dark:bg-zinc-900">
+                            <label className="flex h-8 items-center gap-1.5 rounded border border-zinc-200 bg-white px-2 dark:border-zinc-800 dark:bg-zinc-900">
                               <input
                                 type="checkbox"
                                 checked={trigger.contains ?? false}
@@ -1497,10 +1691,10 @@ export function App() {
                       </button>
                     ))}
                   </div>
-                  <div className="space-y-1.5">
+                  <div className="space-y-2">
                     {(automationDraft.conditions ?? []).map((condition, index) => (
-                      <article key={`${condition.type}-${index}`} className="rounded border border-zinc-200 bg-zinc-50 p-1.5 dark:border-zinc-800 dark:bg-zinc-950">
-                        <div className="mb-1 flex items-center gap-1.5">
+                      <article key={`${condition.type}-${index}`} className="rounded border border-zinc-200 bg-zinc-50 p-2 dark:border-zinc-800 dark:bg-zinc-950">
+                        <div className="mb-1.5 flex items-center gap-1.5">
                           <strong className="min-w-0 flex-1 truncate text-zinc-700 dark:text-zinc-200">
                             {conditionLabel(condition)}
                           </strong>
@@ -1548,7 +1742,7 @@ export function App() {
                           </select>
                         ) : null}
                         {condition.type === "app_running" ? (
-                          <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-1">
+                          <div className="space-y-1.5">
                             <input
                               className={fieldInput}
                               value={condition.appName}
@@ -1561,7 +1755,7 @@ export function App() {
                               }
                               placeholder="App/process"
                             />
-                            <label className="flex h-8 items-center gap-1 rounded border border-zinc-200 bg-white px-2 dark:border-zinc-800 dark:bg-zinc-900">
+                            <label className="flex h-8 items-center gap-1.5 rounded border border-zinc-200 bg-white px-2 dark:border-zinc-800 dark:bg-zinc-900">
                               <input
                                 type="checkbox"
                                 checked={condition.running}
@@ -1595,7 +1789,7 @@ export function App() {
                           </select>
                         ) : null}
                         {condition.type === "wifi_ssid" ? (
-                          <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-1">
+                          <div className="space-y-1.5">
                             <input
                               className={fieldInput}
                               value={condition.ssid}
@@ -1606,7 +1800,7 @@ export function App() {
                               }
                               placeholder="Wi-Fi SSID"
                             />
-                            <label className="flex h-8 items-center gap-1 rounded border border-zinc-200 bg-white px-2 dark:border-zinc-800 dark:bg-zinc-900">
+                            <label className="flex h-8 items-center gap-1.5 rounded border border-zinc-200 bg-white px-2 dark:border-zinc-800 dark:bg-zinc-900">
                               <input
                                 type="checkbox"
                                 checked={condition.contains ?? false}

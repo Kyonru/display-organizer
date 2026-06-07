@@ -11,6 +11,7 @@ mod tray;
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_notification::init())
         .setup(|app| {
             app_menu::setup(app)?;
             tray::setup(app)?;
@@ -44,6 +45,7 @@ pub fn run() {
             commands::delete_automation_rule,
             commands::evaluate_automation_rules,
             commands::record_automation_event,
+            commands::send_local_notification,
             commands::get_recovery_state,
             commands::keep_recovery,
             commands::revert_recovery,

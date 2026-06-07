@@ -141,6 +141,25 @@ function defaultSettings(): AppSettings {
     profileActions: {
       scriptsEnabled: false,
     },
+    automationNotifications: {
+      enabled: true,
+      hiddenOnly: true,
+    },
+  };
+}
+
+function normalizeSettings(settings: Partial<AppSettings>): AppSettings {
+  const defaults = defaultSettings();
+
+  return {
+    profileActions: {
+      ...defaults.profileActions,
+      ...(settings.profileActions ?? {}),
+    },
+    automationNotifications: {
+      ...defaults.automationNotifications,
+      ...(settings.automationNotifications ?? {}),
+    },
   };
 }
 
@@ -151,14 +170,14 @@ function readSettings(): AppSettings {
   }
 
   try {
-    return { ...defaultSettings(), ...(JSON.parse(raw) as AppSettings) };
+    return normalizeSettings(JSON.parse(raw) as Partial<AppSettings>);
   } catch {
     return defaultSettings();
   }
 }
 
 function writeSettings(settings: AppSettings) {
-  window.localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(settings));
+  window.localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(normalizeSettings(settings)));
 }
 
 function normalizeProfile(profile: LayoutProfile): LayoutProfile {

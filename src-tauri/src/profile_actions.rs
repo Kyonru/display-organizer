@@ -517,6 +517,7 @@ mod tests {
     fn settings(scripts_enabled: bool) -> AppSettings {
         AppSettings {
             profile_actions: ProfileActionSettings { scripts_enabled },
+            ..AppSettings::default()
         }
     }
 

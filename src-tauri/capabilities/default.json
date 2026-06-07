@@ -18,6 +18,7 @@
     "core:tray:allow-set-tooltip",
     "core:tray:allow-set-visible",
     "dialog:default",
-    "dialog:allow-open"
+    "dialog:allow-open",
+    "notification:default"
   ]
 }

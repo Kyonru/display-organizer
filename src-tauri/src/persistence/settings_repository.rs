@@ -31,7 +31,9 @@ pub fn save_settings(settings: AppSettings) -> Result<AppSettings, AppError> {
 
 #[cfg(test)]
 mod tests {
-    use crate::display_engine::models::{AppSettings, ProfileActionSettings};
+    use crate::display_engine::models::{
+        AppSettings, AutomationNotificationSettings, ProfileActionSettings,
+    };
 
     use super::{get_settings, save_settings};
 
@@ -41,14 +43,31 @@ mod tests {
             profile_actions: ProfileActionSettings {
                 scripts_enabled: true,
             },
+            automation_notifications: AutomationNotificationSettings {
+                enabled: false,
+                hidden_only: true,
+            },
         };
 
         save_settings(settings).expect("save settings");
-        assert!(
-            get_settings()
-                .expect("get settings")
-                .profile_actions
-                .scripts_enabled
-        );
+        let loaded = get_settings().expect("get settings");
+
+        assert!(loaded.profile_actions.scripts_enabled);
+        assert!(!loaded.automation_notifications.enabled);
+        assert!(loaded.automation_notifications.hidden_only);
+    }
+
+    #[test]
+    fn older_settings_default_automation_notifications() {
+        let settings = serde_json::from_str::<AppSettings>(
+            r#"{
+              "profileActions": { "scriptsEnabled": true }
+            }"#,
+        )
+        .expect("deserialize older settings");
+
+        assert!(settings.profile_actions.scripts_enabled);
+        assert!(settings.automation_notifications.enabled);
+        assert!(settings.automation_notifications.hidden_only);
     }
 }

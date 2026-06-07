@@ -1241,6 +1241,7 @@ Scope:
 - Conditions for display count, display ids, internal/external display presence, platform, time windows, app running state, power source, and Wi-Fi SSID
 - Confirmation-first automation with explicit per-rule auto-run opt-in
 - Rule cooldowns and match signatures to suppress repeated prompts for unchanged context
+- Local notifications for confirmation-required automation matches, including while the app is focused
 - Robust rollback/recovery UX
 - Multi-monitor test coverage
 - DPI and scaling polish

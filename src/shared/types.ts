@@ -127,6 +127,10 @@ export type AppSettings = {
   profileActions: {
     scriptsEnabled: boolean;
   };
+  automationNotifications: {
+    enabled: boolean;
+    hiddenOnly: boolean;
+  };
 };
 
 export type LayoutProfile = {
