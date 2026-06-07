@@ -17,10 +17,17 @@ type BetaState = {
   recoveryState: RecoveryState | null;
   diagnostics: DiagnosticsBundle | null;
   error: string | null;
+  setAutomationEvaluation: (evaluation: AutomationEvaluation) => void;
   loadAutomationRules: () => Promise<void>;
   saveAutomationRule: (draft: AutomationRuleDraft) => Promise<AutomationRule | null>;
   deleteAutomationRule: (id: string) => Promise<void>;
   evaluateAutomation: () => Promise<AutomationEvaluation | null>;
+  recordAutomationEvent: (
+    ruleId: string | null,
+    profileId: string | null,
+    eventType: AutomationEventType,
+    message: string,
+  ) => Promise<void>;
   clearPendingAutomation: (eventType?: AutomationEventType, message?: string) => Promise<void>;
   loadRecoveryState: () => Promise<void>;
   keepRecovery: () => Promise<void>;
@@ -32,6 +39,14 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+function pendingMatchesForEvaluation(evaluation: AutomationEvaluation) {
+  if (evaluation.matches.length > 1) {
+    return evaluation.matches;
+  }
+
+  return evaluation.matches.filter((match) => match.requiresConfirmation);
+}
+
 export const useBetaStore = create<BetaState>((set, get) => ({
   automationRules: [],
   automationEvaluation: null,
@@ -39,6 +54,12 @@ export const useBetaStore = create<BetaState>((set, get) => ({
   recoveryState: null,
   diagnostics: null,
   error: null,
+  setAutomationEvaluation: (evaluation) => {
+    set({
+      automationEvaluation: evaluation,
+      pendingAutomationMatches: pendingMatchesForEvaluation(evaluation),
+    });
+  },
   loadAutomationRules: async () => {
     set({ error: null });
     try {
@@ -78,12 +99,20 @@ export const useBetaStore = create<BetaState>((set, get) => ({
       const evaluation = await api.evaluateAutomationRules();
       set({
         automationEvaluation: evaluation,
-        pendingAutomationMatches: evaluation.matches,
+        pendingAutomationMatches: pendingMatchesForEvaluation(evaluation),
       });
       return evaluation;
     } catch (error) {
       set({ error: errorMessage(error) });
       return null;
+    }
+  },
+  recordAutomationEvent: async (ruleId, profileId, eventType, message) => {
+    set({ error: null });
+    try {
+      await api.recordAutomationEvent(ruleId, profileId, eventType, message);
+    } catch (error) {
+      set({ error: errorMessage(error) });
     }
   },
   clearPendingAutomation: async (eventType = "skipped", message = "Automation prompt dismissed") => {

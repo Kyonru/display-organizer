@@ -163,11 +163,18 @@ pub fn evaluate_automation_rules() -> Result<AutomationEvaluation, AppError> {
     let evaluation = automation::evaluate_rules(&rules, &profiles, &displays);
 
     for automation_match in &evaluation.matches {
+        beta_repository::mark_automation_rule_matched(
+            &automation_match.rule.id,
+            &automation_match.match_signature,
+        )?;
         beta_repository::record_automation_event(
             Some(automation_match.rule.id.clone()),
             Some(automation_match.rule.profile_id.clone()),
             AutomationEventType::Matched,
-            format!("Matched {}", automation_match.rule.name),
+            format!(
+                "Matched {} ({})",
+                automation_match.rule.name, automation_match.reason
+            ),
         )?;
     }
 

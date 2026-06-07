@@ -17,7 +17,7 @@ The current implementation is a Tauri v2 desktop app with a React, TypeScript, Z
 | Change macOS scale/resolution modes | Implemented when CoreGraphics reports usable modes |
 | Change macOS rotation | Experimental through `displayplacer` |
 | Menu bar quick switching | Implemented |
-| Automation rules | Implemented for setup matching and confirmation-first apply |
+| Automation rules | Implemented with display, time, app, launch, power, and Wi-Fi presets |
 | Recovery banner | Implemented |
 | Diagnostics export | Implemented |
 | Windows native adapter | Planned |
@@ -136,16 +136,18 @@ Known `displayplacer` rotation-only errors containing `res:0x0` and `scaling:off
 
 ### Automation
 
-Automation rules match the current connected display setup and suggest profiles to apply. Rules currently support:
+Automation rules apply saved workspace profiles from practical local context. Rules support preset triggers for:
 
-- Connected display stable ids
-- Display count
-- Internal display presence
-- External display presence
-- Platform
-- Optional dock signature field in the model
+- Display setup changes
+- Local time schedules and time windows
+- App/process opened, closed, or running state
+- Display Layout Manager launch checks
+- Power source
+- Wi-Fi SSID context
 
-Automation is confirmation-first. When a rule matches, the app shows an apply prompt instead of applying silently. Prompts expire after 30 seconds and record a skipped automation event.
+Rules can add conditions for platform, connected displays, display count, internal/external displays, time windows, app running/not running, power source, and Wi-Fi SSID. Confirmation is the default. Per-rule auto-run is available only when explicitly selected, and cooldowns prevent repeated prompts or repeated automatic applies for unchanged context.
+
+The native automation monitor checks local context every 15 seconds and emits matches to the UI. When multiple rules match, the app shows choices instead of preselecting one. Saved Profile Actions run when the matched profile applies successfully.
 
 ### Recovery
 
@@ -166,11 +168,11 @@ The Diagnostics button exports a local JSON bundle and shows a toast when the do
 - Redacted display snapshots
 - Profile summaries
 - Profile action counts, action types, and app names
-- Automation rules
+- Automation rules, trigger/condition summaries, and recent events
 - Recent automation events
 - Current recovery state when present
 
-Diagnostics hash display stable ids and do not export serial numbers, raw EDID, or script commands by default.
+Diagnostics hash display stable ids and Wi-Fi SSIDs, and do not export serial numbers, raw EDID, or script commands by default.
 
 ### Menu Bar Quick Switching
 

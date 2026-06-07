@@ -14,22 +14,36 @@ import {
   AppWindow,
   ArrowDown,
   ArrowUp,
+  BatteryCharging,
+  Clock,
   Copy,
   FileDown,
   Monitor,
   Moon,
   Plus,
+  Power,
   RefreshCcw,
   Save,
   Sun,
   Terminal,
   Trash2,
+  Wifi,
   X,
   Zap,
 } from "lucide-react";
 import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
 import { clsx } from "clsx";
+import {
+  automationRuleToDraft,
+  conditionLabel,
+  cooldownLabel,
+  createConditionPreset,
+  createDisplaySetupRuleDraft,
+  createTriggerPreset,
+  platformOptions,
+  triggerLabel,
+} from "../features/automation/automationRules";
 import { useBetaStore } from "../features/betaStore";
 import { useCanvasStore } from "../features/canvas/canvasStore";
 import {
@@ -61,7 +75,16 @@ import { useProfileStore } from "../features/profiles/profileStore";
 import { useSettingsStore } from "../features/settings/settingsStore";
 import { ensureMenuBarIconVisible } from "../features/tray/trayVisibility";
 import { isTauriRuntime } from "../shared/runtime";
-import type { Display, DisplayRotation, PlatformName, ProfileAction } from "../shared/types";
+import type {
+  AutomationCondition,
+  AutomationEvaluation,
+  AutomationRuleDraft,
+  AutomationTrigger,
+  Display,
+  DisplayRotation,
+  PlatformName,
+  ProfileAction,
+} from "../shared/types";
 
 type MonitorNodeData = {
   display: Display;
@@ -161,13 +184,16 @@ export function App() {
   const { gridSize, snapToGrid, setDirty, isDirty, setSelectedDisplayIds } = useCanvasStore();
   const {
     automationRules,
+    automationEvaluation,
     pendingAutomationMatches,
     recoveryState,
     error: betaError,
+    setAutomationEvaluation,
     loadAutomationRules,
     saveAutomationRule,
     deleteAutomationRule,
     evaluateAutomation,
+    recordAutomationEvent,
     clearPendingAutomation,
     loadRecoveryState,
     keepRecovery,
@@ -179,8 +205,10 @@ export function App() {
   const [selectedDisplayId, setSelectedDisplayId] = useState<string | null>(null);
   const selectedDisplayIdRef = useRef<string | null>(null);
   const automationPromptSignatureRef = useRef<string | null>(null);
+  const automationAutoSignatureRef = useRef<string | null>(null);
   const [profileName, setProfileName] = useState("Work Desk");
   const [profileActions, setProfileActions] = useState<ProfileAction[]>([]);
+  const [automationDraft, setAutomationDraft] = useState<AutomationRuleDraft | null>(null);
   const [recoverySecondsRemaining, setRecoverySecondsRemaining] = useState(0);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
@@ -315,7 +343,10 @@ export function App() {
 
     const setupSignature = [
       automationRules
-        .map((rule) => `${rule.id}:${rule.enabled}:${rule.profileId}:${JSON.stringify(rule.match)}`)
+        .map(
+          (rule) =>
+            `${rule.id}:${rule.enabled}:${rule.profileId}:${JSON.stringify(rule.match)}:${JSON.stringify(rule.triggers)}:${JSON.stringify(rule.conditions)}:${rule.confirmationMode}:${rule.cooldownMs}`,
+        )
         .sort()
         .join("|"),
       profiles
@@ -365,6 +396,44 @@ export function App() {
 
     return () => window.clearTimeout(timeout);
   }, [clearPendingAutomation, pendingAutomationMatches.length]);
+
+  useEffect(() => {
+    if (!automationEvaluation || isApplying || pendingAutomationMatches.length > 0) {
+      return;
+    }
+
+    const autoMatches = automationEvaluation.matches.filter((match) => !match.requiresConfirmation);
+    if (autoMatches.length !== 1) {
+      return;
+    }
+
+    const match = autoMatches[0];
+    const signature = match.matchSignature || `${match.rule.id}:${automationEvaluation.evaluatedAt}`;
+    if (automationAutoSignatureRef.current === signature) {
+      return;
+    }
+
+    automationAutoSignatureRef.current = signature;
+    void applyProfile(match.rule.profileId).then(async (result) => {
+      if (result?.applied) {
+        await recordAutomationEvent(match.rule.id, match.rule.profileId, "applied", `Auto-applied ${match.profileName}`);
+        setDirty(false);
+        await refreshDisplays();
+        await loadRecoveryState();
+      } else {
+        await recordAutomationEvent(match.rule.id, match.rule.profileId, "failed", `Failed to auto-apply ${match.profileName}`);
+      }
+    });
+  }, [
+    applyProfile,
+    automationEvaluation,
+    isApplying,
+    loadRecoveryState,
+    pendingAutomationMatches.length,
+    recordAutomationEvent,
+    refreshDisplays,
+    setDirty,
+  ]);
 
   useEffect(() => {
     const canvasNodes = activeProfileId
@@ -727,19 +796,91 @@ export function App() {
       return;
     }
 
-    await saveAutomationRule({
-      name: `${profile.name} setup`,
-      enabled: true,
-      profileId: profile.id,
-      match: {
-        displayStableIds: displays.map((display) => display.stableId ?? display.id).sort(),
-        displayCount: displays.length,
-        requireInternal: displays.some((display) => display.isInternal),
-        requireExternal: displays.some((display) => !display.isInternal),
-        dockSignature: null,
-        platform: "macos",
-      },
+    setAutomationDraft(createDisplaySetupRuleDraft(profile, displays));
+  };
+
+  const updateAutomationDraft = useCallback((updater: (draft: AutomationRuleDraft) => AutomationRuleDraft) => {
+    setAutomationDraft((currentDraft) => (currentDraft ? updater(currentDraft) : currentDraft));
+  }, []);
+
+  const handleEditAutomationRule = (ruleId: string) => {
+    const rule = automationRules.find((item) => item.id === ruleId);
+    if (!rule) {
+      return;
+    }
+
+    setAutomationDraft(automationRuleToDraft(rule));
+  };
+
+  const handleSaveAutomationDraft = async () => {
+    if (!automationDraft) {
+      return;
+    }
+
+    const saved = await saveAutomationRule({
+      ...automationDraft,
+      name: automationDraft.name.trim() || "Automation rule",
+      triggers: automationDraft.triggers ?? [],
+      conditions: automationDraft.conditions ?? [],
+      confirmationMode: automationDraft.confirmationMode ?? "confirm",
+      cooldownMs: automationDraft.cooldownMs ?? 600_000,
     });
+
+    if (saved) {
+      setAutomationDraft(null);
+    }
+  };
+
+  const handleAddAutomationTrigger = (kind: AutomationTrigger["type"]) => {
+    updateAutomationDraft((draft) => ({
+      ...draft,
+      triggers: [...(draft.triggers ?? []), createTriggerPreset(kind, displays)],
+    }));
+  };
+
+  const handleUpdateAutomationTrigger = (
+    index: number,
+    updater: (trigger: AutomationTrigger) => AutomationTrigger,
+  ) => {
+    updateAutomationDraft((draft) => ({
+      ...draft,
+      triggers: (draft.triggers ?? []).map((trigger, triggerIndex) =>
+        triggerIndex === index ? updater(trigger) : trigger,
+      ),
+    }));
+  };
+
+  const handleDeleteAutomationTrigger = (index: number) => {
+    updateAutomationDraft((draft) => ({
+      ...draft,
+      triggers: (draft.triggers ?? []).filter((_, triggerIndex) => triggerIndex !== index),
+    }));
+  };
+
+  const handleAddAutomationCondition = (kind: AutomationCondition["type"]) => {
+    updateAutomationDraft((draft) => ({
+      ...draft,
+      conditions: [...(draft.conditions ?? []), createConditionPreset(kind, displays)],
+    }));
+  };
+
+  const handleUpdateAutomationCondition = (
+    index: number,
+    updater: (condition: AutomationCondition) => AutomationCondition,
+  ) => {
+    updateAutomationDraft((draft) => ({
+      ...draft,
+      conditions: (draft.conditions ?? []).map((condition, conditionIndex) =>
+        conditionIndex === index ? updater(condition) : condition,
+      ),
+    }));
+  };
+
+  const handleDeleteAutomationCondition = (index: number) => {
+    updateAutomationDraft((draft) => ({
+      ...draft,
+      conditions: (draft.conditions ?? []).filter((_, conditionIndex) => conditionIndex !== index),
+    }));
   };
 
   const handleToggleAutomationRule = async (ruleId: string) => {
@@ -749,11 +890,8 @@ export function App() {
     }
 
     await saveAutomationRule({
-      id: rule.id,
-      name: rule.name,
+      ...automationRuleToDraft(rule),
       enabled: !rule.enabled,
-      profileId: rule.profileId,
-      match: rule.match,
     });
   };
 
@@ -831,13 +969,25 @@ export function App() {
         }
       });
     });
+    const unlistenAutomation = listen<AutomationEvaluation>("automation:matches", (event) => {
+      setAutomationEvaluation(event.payload);
+    });
 
     return () => {
       void unlistenRefresh.then((unlisten) => unlisten());
       void unlistenApply.then((unlisten) => unlisten());
       void unlistenApplyProfile.then((unlisten) => unlisten());
+      void unlistenAutomation.then((unlisten) => unlisten());
     };
-  }, [applyProfile, handleApplyManualLayout, isNativeApp, loadRecoveryState, refreshDisplays, setDirty]);
+  }, [
+    applyProfile,
+    handleApplyManualLayout,
+    isNativeApp,
+    loadRecoveryState,
+    refreshDisplays,
+    setAutomationEvaluation,
+    setDirty,
+  ]);
 
   const selectedStableId = selectedDisplay ? selectedDisplay.stableId ?? selectedDisplay.id : null;
   const selectedScaleValue =
@@ -1034,58 +1184,518 @@ export function App() {
               <h2 className="text-xs font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
                 Automation
               </h2>
-              <button
-                type="button"
-                className={iconButton}
-                aria-label="Test automation rules"
-                onClick={() => void evaluateAutomation()}
-              >
-                <RefreshCcw size={14} />
-              </button>
-            </div>
-            <button
-              type="button"
-              className={buttonBase}
-              disabled={!activeProfileId || displays.length === 0}
-              onClick={() => void handleCreateAutomationRule()}
-            >
-              <Plus size={14} />
-              Add Rule
-            </button>
-            <div className="mt-2 space-y-1.5">
-              {automationRules.length === 0 ? (
-                <p className="rounded border border-dashed border-zinc-300 p-2 text-xs leading-5 text-zinc-500 dark:border-zinc-800 dark:text-zinc-400">
-                  Add a rule from an open profile and the current display setup.
-                </p>
-              ) : null}
-              {automationRules.map((rule) => (
-                <article
-                  key={rule.id}
-                  className="flex items-start gap-2 rounded border border-zinc-200 bg-white p-2 dark:border-zinc-800 dark:bg-zinc-900/70"
+              <div className="flex gap-1">
+                <button
+                  type="button"
+                  className={iconButton}
+                  aria-label="Test automation rules"
+                  onClick={() => void evaluateAutomation()}
                 >
-                  <button
-                    type="button"
-                    className="min-w-0 flex-1 text-left"
-                    onClick={() => void handleToggleAutomationRule(rule.id)}
-                  >
-                    <strong className="block truncate text-xs font-semibold text-zinc-900 dark:text-zinc-100">
-                      {rule.name}
-                    </strong>
-                    <span className="mt-0.5 block text-[11px] text-zinc-500 dark:text-zinc-400">
-                      {rule.enabled ? "Enabled" : "Paused"} · {rule.match.displayCount ?? rule.match.displayStableIds.length} displays
-                    </span>
-                  </button>
-                  <button
-                    type="button"
-                    className={iconButton}
-                    aria-label={`Delete ${rule.name}`}
-                    onClick={() => void deleteAutomationRule(rule.id)}
-                  >
-                    <Trash2 size={14} />
-                  </button>
-                </article>
-              ))}
+                  <RefreshCcw size={14} />
+                </button>
+                <button
+                  type="button"
+                  className={iconButton}
+                  aria-label="Add automation rule"
+                  disabled={!activeProfileId || displays.length === 0}
+                  onClick={() => void handleCreateAutomationRule()}
+                >
+                  <Plus size={14} />
+                </button>
+              </div>
             </div>
+
+            {automationDraft ? (
+              <div className="space-y-2 rounded border border-zinc-200 bg-white p-2 text-xs dark:border-zinc-800 dark:bg-zinc-900/70">
+                <input
+                  className={fieldInput}
+                  value={automationDraft.name}
+                  onChange={(event) => updateAutomationDraft((draft) => ({ ...draft, name: event.target.value }))}
+                  placeholder="Rule name"
+                />
+                <div className="grid grid-cols-2 gap-1.5">
+                  <select
+                    className={fieldInput}
+                    value={automationDraft.profileId}
+                    onChange={(event) => updateAutomationDraft((draft) => ({ ...draft, profileId: event.target.value }))}
+                  >
+                    {profiles.map((profile) => (
+                      <option key={profile.id} value={profile.id}>
+                        {profile.name}
+                      </option>
+                    ))}
+                  </select>
+                  <select
+                    className={fieldInput}
+                    value={automationDraft.confirmationMode ?? "confirm"}
+                    onChange={(event) =>
+                      updateAutomationDraft((draft) => ({
+                        ...draft,
+                        confirmationMode: event.target.value === "auto" ? "auto" : "confirm",
+                      }))
+                    }
+                  >
+                    <option value="confirm">Confirm</option>
+                    <option value="auto">Auto</option>
+                  </select>
+                  <label className="flex h-8 items-center gap-2 rounded border border-zinc-200 bg-zinc-50 px-2 dark:border-zinc-800 dark:bg-zinc-950">
+                    <input
+                      type="checkbox"
+                      checked={automationDraft.enabled}
+                      onChange={(event) => updateAutomationDraft((draft) => ({ ...draft, enabled: event.target.checked }))}
+                    />
+                    Enabled
+                  </label>
+                  <select
+                    className={fieldInput}
+                    value={automationDraft.cooldownMs ?? 600_000}
+                    onChange={(event) =>
+                      updateAutomationDraft((draft) => ({ ...draft, cooldownMs: Number(event.target.value) }))
+                    }
+                  >
+                    <option value={0}>No cooldown</option>
+                    <option value={60_000}>1 min</option>
+                    <option value={300_000}>5 min</option>
+                    <option value={600_000}>10 min</option>
+                    <option value={1_800_000}>30 min</option>
+                  </select>
+                </div>
+
+                <div>
+                  <div className="mb-1 flex items-center justify-between">
+                    <strong className="text-[11px] uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
+                      Triggers
+                    </strong>
+                  </div>
+                  <div className="mb-1.5 grid grid-cols-3 gap-1">
+                    {([
+                      ["display_setup_changed", Monitor, "Display"],
+                      ["time_schedule", Clock, "Time"],
+                      ["app_event", AppWindow, "App"],
+                      ["app_lifecycle", Power, "Launch"],
+                      ["power_source", BatteryCharging, "Power"],
+                      ["network_context", Wifi, "Wi-Fi"],
+                    ] as const).map(([kind, Icon, label]) => (
+                      <button
+                        key={kind}
+                        type="button"
+                        className={buttonBase}
+                        onClick={() => handleAddAutomationTrigger(kind)}
+                      >
+                        <Icon size={13} />
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                  <div className="space-y-1.5">
+                    {(automationDraft.triggers ?? []).map((trigger, index) => (
+                      <article key={`${trigger.type}-${index}`} className="rounded border border-zinc-200 bg-zinc-50 p-1.5 dark:border-zinc-800 dark:bg-zinc-950">
+                        <div className="mb-1 flex items-center gap-1.5">
+                          <strong className="min-w-0 flex-1 truncate text-zinc-700 dark:text-zinc-200">
+                            {triggerLabel(trigger)}
+                          </strong>
+                          <button
+                            type="button"
+                            className={iconButton}
+                            aria-label="Delete trigger"
+                            onClick={() => handleDeleteAutomationTrigger(index)}
+                          >
+                            <Trash2 size={12} />
+                          </button>
+                        </div>
+                        {trigger.type === "display_setup_changed" ? (
+                          <div className="grid grid-cols-2 gap-1">
+                            <input
+                              className={fieldInput}
+                              type="number"
+                              min={0}
+                              value={trigger.displayCount ?? ""}
+                              onChange={(event) =>
+                                handleUpdateAutomationTrigger(index, (current) =>
+                                  current.type === "display_setup_changed"
+                                    ? { ...current, displayCount: maybeNumber(event.target.value) }
+                                    : current,
+                                )
+                              }
+                              placeholder="Display count"
+                            />
+                            <select
+                              className={fieldInput}
+                              value={trigger.platform ?? ""}
+                              onChange={(event) =>
+                                handleUpdateAutomationTrigger(index, (current) =>
+                                  current.type === "display_setup_changed"
+                                    ? { ...current, platform: (event.target.value || null) as PlatformName | null }
+                                    : current,
+                                )
+                              }
+                            >
+                              <option value="">Any OS</option>
+                              {platformOptions().map((platform) => (
+                                <option key={platform} value={platform}>
+                                  {platform}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+                        ) : null}
+                        {trigger.type === "time_schedule" ? (
+                          <div className="grid grid-cols-3 gap-1">
+                            <input
+                              className={fieldInput}
+                              type="time"
+                              value={trigger.exactTime ?? ""}
+                              onChange={(event) =>
+                                handleUpdateAutomationTrigger(index, (current) =>
+                                  current.type === "time_schedule"
+                                    ? { ...current, exactTime: event.target.value || null }
+                                    : current,
+                                )
+                              }
+                            />
+                            <input
+                              className={fieldInput}
+                              type="time"
+                              value={trigger.startTime ?? ""}
+                              onChange={(event) =>
+                                handleUpdateAutomationTrigger(index, (current) =>
+                                  current.type === "time_schedule"
+                                    ? { ...current, startTime: event.target.value || null, exactTime: null }
+                                    : current,
+                                )
+                              }
+                            />
+                            <input
+                              className={fieldInput}
+                              type="time"
+                              value={trigger.endTime ?? ""}
+                              onChange={(event) =>
+                                handleUpdateAutomationTrigger(index, (current) =>
+                                  current.type === "time_schedule"
+                                    ? { ...current, endTime: event.target.value || null, exactTime: null }
+                                    : current,
+                                )
+                              }
+                            />
+                          </div>
+                        ) : null}
+                        {trigger.type === "app_event" ? (
+                          <div className="grid grid-cols-[minmax(0,1fr)_96px] gap-1">
+                            <input
+                              className={fieldInput}
+                              value={trigger.appName}
+                              onChange={(event) =>
+                                handleUpdateAutomationTrigger(index, (current) =>
+                                  current.type === "app_event" ? { ...current, appName: event.target.value } : current,
+                                )
+                              }
+                              placeholder="App/process"
+                            />
+                            <select
+                              className={fieldInput}
+                              value={trigger.event}
+                              onChange={(event) =>
+                                handleUpdateAutomationTrigger(index, (current) =>
+                                  current.type === "app_event"
+                                    ? { ...current, event: event.target.value as "opened" | "closed" | "running" }
+                                    : current,
+                                )
+                              }
+                            >
+                              <option value="running">Running</option>
+                              <option value="opened">Opened</option>
+                              <option value="closed">Closed</option>
+                            </select>
+                          </div>
+                        ) : null}
+                        {trigger.type === "app_lifecycle" ? (
+                          <select
+                            className={fieldInput}
+                            value={trigger.event}
+                            onChange={(event) =>
+                              handleUpdateAutomationTrigger(index, (current) =>
+                                current.type === "app_lifecycle"
+                                  ? { ...current, event: event.target.value === "system_wake" ? "system_wake" : "app_launch" }
+                                  : current,
+                              )
+                            }
+                          >
+                            <option value="app_launch">App launch</option>
+                            <option value="system_wake">System wake</option>
+                          </select>
+                        ) : null}
+                        {trigger.type === "power_source" ? (
+                          <select
+                            className={fieldInput}
+                            value={trigger.source}
+                            onChange={(event) =>
+                              handleUpdateAutomationTrigger(index, (current) =>
+                                current.type === "power_source"
+                                  ? { ...current, source: event.target.value as "ac" | "battery" | "charging" }
+                                  : current,
+                              )
+                            }
+                          >
+                            <option value="ac">AC power</option>
+                            <option value="battery">Battery</option>
+                            <option value="charging">Charging</option>
+                          </select>
+                        ) : null}
+                        {trigger.type === "network_context" ? (
+                          <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-1">
+                            <input
+                              className={fieldInput}
+                              value={trigger.ssid}
+                              onChange={(event) =>
+                                handleUpdateAutomationTrigger(index, (current) =>
+                                  current.type === "network_context" ? { ...current, ssid: event.target.value } : current,
+                                )
+                              }
+                              placeholder="Wi-Fi SSID"
+                            />
+                            <label className="flex h-8 items-center gap-1 rounded border border-zinc-200 bg-white px-2 dark:border-zinc-800 dark:bg-zinc-900">
+                              <input
+                                type="checkbox"
+                                checked={trigger.contains ?? false}
+                                onChange={(event) =>
+                                  handleUpdateAutomationTrigger(index, (current) =>
+                                    current.type === "network_context"
+                                      ? { ...current, contains: event.target.checked }
+                                      : current,
+                                  )
+                                }
+                              />
+                              Contains
+                            </label>
+                          </div>
+                        ) : null}
+                      </article>
+                    ))}
+                  </div>
+                </div>
+
+                <div>
+                  <strong className="mb-1 block text-[11px] uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
+                    Conditions
+                  </strong>
+                  <div className="mb-1.5 flex flex-wrap gap-1">
+                    {([
+                      ["display_count", "Count"],
+                      ["display_ids", "Displays"],
+                      ["platform", "OS"],
+                      ["app_running", "App"],
+                      ["power_source", "Power"],
+                      ["wifi_ssid", "Wi-Fi"],
+                    ] as const).map(([kind, label]) => (
+                      <button
+                        key={kind}
+                        type="button"
+                        className={buttonBase}
+                        onClick={() => handleAddAutomationCondition(kind)}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                  <div className="space-y-1.5">
+                    {(automationDraft.conditions ?? []).map((condition, index) => (
+                      <article key={`${condition.type}-${index}`} className="rounded border border-zinc-200 bg-zinc-50 p-1.5 dark:border-zinc-800 dark:bg-zinc-950">
+                        <div className="mb-1 flex items-center gap-1.5">
+                          <strong className="min-w-0 flex-1 truncate text-zinc-700 dark:text-zinc-200">
+                            {conditionLabel(condition)}
+                          </strong>
+                          <button
+                            type="button"
+                            className={iconButton}
+                            aria-label="Delete condition"
+                            onClick={() => handleDeleteAutomationCondition(index)}
+                          >
+                            <Trash2 size={12} />
+                          </button>
+                        </div>
+                        {condition.type === "display_count" ? (
+                          <input
+                            className={fieldInput}
+                            type="number"
+                            min={0}
+                            value={condition.count}
+                            onChange={(event) =>
+                              handleUpdateAutomationCondition(index, (current) =>
+                                current.type === "display_count"
+                                  ? { ...current, count: Math.max(0, Number(event.target.value) || 0) }
+                                  : current,
+                              )
+                            }
+                          />
+                        ) : null}
+                        {condition.type === "platform" ? (
+                          <select
+                            className={fieldInput}
+                            value={condition.platform}
+                            onChange={(event) =>
+                              handleUpdateAutomationCondition(index, (current) =>
+                                current.type === "platform"
+                                  ? { ...current, platform: event.target.value as PlatformName }
+                                  : current,
+                              )
+                            }
+                          >
+                            {platformOptions().map((platform) => (
+                              <option key={platform} value={platform}>
+                                {platform}
+                              </option>
+                            ))}
+                          </select>
+                        ) : null}
+                        {condition.type === "app_running" ? (
+                          <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-1">
+                            <input
+                              className={fieldInput}
+                              value={condition.appName}
+                              onChange={(event) =>
+                                handleUpdateAutomationCondition(index, (current) =>
+                                  current.type === "app_running"
+                                    ? { ...current, appName: event.target.value }
+                                    : current,
+                                )
+                              }
+                              placeholder="App/process"
+                            />
+                            <label className="flex h-8 items-center gap-1 rounded border border-zinc-200 bg-white px-2 dark:border-zinc-800 dark:bg-zinc-900">
+                              <input
+                                type="checkbox"
+                                checked={condition.running}
+                                onChange={(event) =>
+                                  handleUpdateAutomationCondition(index, (current) =>
+                                    current.type === "app_running"
+                                      ? { ...current, running: event.target.checked }
+                                      : current,
+                                  )
+                                }
+                              />
+                              Running
+                            </label>
+                          </div>
+                        ) : null}
+                        {condition.type === "power_source" ? (
+                          <select
+                            className={fieldInput}
+                            value={condition.source}
+                            onChange={(event) =>
+                              handleUpdateAutomationCondition(index, (current) =>
+                                current.type === "power_source"
+                                  ? { ...current, source: event.target.value as "ac" | "battery" | "charging" }
+                                  : current,
+                              )
+                            }
+                          >
+                            <option value="ac">AC power</option>
+                            <option value="battery">Battery</option>
+                            <option value="charging">Charging</option>
+                          </select>
+                        ) : null}
+                        {condition.type === "wifi_ssid" ? (
+                          <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-1">
+                            <input
+                              className={fieldInput}
+                              value={condition.ssid}
+                              onChange={(event) =>
+                                handleUpdateAutomationCondition(index, (current) =>
+                                  current.type === "wifi_ssid" ? { ...current, ssid: event.target.value } : current,
+                                )
+                              }
+                              placeholder="Wi-Fi SSID"
+                            />
+                            <label className="flex h-8 items-center gap-1 rounded border border-zinc-200 bg-white px-2 dark:border-zinc-800 dark:bg-zinc-900">
+                              <input
+                                type="checkbox"
+                                checked={condition.contains ?? false}
+                                onChange={(event) =>
+                                  handleUpdateAutomationCondition(index, (current) =>
+                                    current.type === "wifi_ssid"
+                                      ? { ...current, contains: event.target.checked }
+                                      : current,
+                                  )
+                                }
+                              />
+                              Contains
+                            </label>
+                          </div>
+                        ) : null}
+                      </article>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="flex gap-1.5">
+                  <button type="button" className={primaryButton} onClick={() => void handleSaveAutomationDraft()}>
+                    <Save size={14} />
+                    Save rule
+                  </button>
+                  <button type="button" className={buttonBase} onClick={() => void evaluateAutomation()}>
+                    <RefreshCcw size={14} />
+                    Test
+                  </button>
+                  <button type="button" className={buttonBase} onClick={() => setAutomationDraft(null)}>
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div className="space-y-1.5">
+                {automationRules.length === 0 ? (
+                  <p className="rounded border border-dashed border-zinc-300 p-2 text-xs leading-5 text-zinc-500 dark:border-zinc-800 dark:text-zinc-400">
+                    Open a profile and add a rule from the current setup.
+                  </p>
+                ) : null}
+                {automationRules.map((rule) => (
+                  <article
+                    key={rule.id}
+                    className="flex items-start gap-2 rounded border border-zinc-200 bg-white p-2 dark:border-zinc-800 dark:bg-zinc-900/70"
+                  >
+                    <button
+                      type="button"
+                      className="min-w-0 flex-1 text-left"
+                      onClick={() => handleEditAutomationRule(rule.id)}
+                    >
+                      <strong className="block truncate text-xs font-semibold text-zinc-900 dark:text-zinc-100">
+                        {rule.name}
+                      </strong>
+                      <span className="mt-0.5 block text-[11px] text-zinc-500 dark:text-zinc-400">
+                        {rule.enabled ? "Enabled" : "Paused"} · {rule.triggers?.length || 1} trigger
+                        {(rule.triggers?.length || 1) === 1 ? "" : "s"} · {rule.confirmationMode ?? "confirm"} ·{" "}
+                        {cooldownLabel(rule.cooldownMs ?? 600_000)}
+                      </span>
+                    </button>
+                    <div className="flex shrink-0 gap-1">
+                      <button
+                        type="button"
+                        className={iconButton}
+                        aria-label={`${rule.enabled ? "Pause" : "Enable"} ${rule.name}`}
+                        onClick={() => void handleToggleAutomationRule(rule.id)}
+                      >
+                        <Power size={13} />
+                      </button>
+                      <button
+                        type="button"
+                        className={iconButton}
+                        aria-label={`Delete ${rule.name}`}
+                        onClick={() => void deleteAutomationRule(rule.id)}
+                      >
+                        <Trash2 size={14} />
+                      </button>
+                    </div>
+                  </article>
+                ))}
+                {automationEvaluation?.matches.length ? (
+                  <div className="rounded border border-emerald-200 bg-emerald-50 p-2 text-[11px] leading-4 text-emerald-800 dark:border-emerald-900/60 dark:bg-emerald-950/50 dark:text-emerald-100">
+                    {automationEvaluation.matches.length} match
+                    {automationEvaluation.matches.length === 1 ? "" : "es"} ·{" "}
+                    {automationEvaluation.matches.map((match) => match.reason).join("; ")}
+                  </div>
+                ) : null}
+              </div>
+            )}
           </div>
         </aside>
 

@@ -1237,8 +1237,10 @@ Estimated effort: **8 to 12 weeks after Alpha**
 
 Scope:
 
-- Automation rules
-- Auto-apply with confirmation
+- Preset-based automation rules for display setup, time, app events, app lifecycle, power source, and Wi-Fi context
+- Conditions for display count, display ids, internal/external display presence, platform, time windows, app running state, power source, and Wi-Fi SSID
+- Confirmation-first automation with explicit per-rule auto-run opt-in
+- Rule cooldowns and match signatures to suppress repeated prompts for unchanged context
 - Robust rollback/recovery UX
 - Multi-monitor test coverage
 - DPI and scaling polish
@@ -1246,13 +1248,14 @@ Scope:
 - Improved Windows monitor identity
 - macOS display mode validation
 - Profile Action safety, diagnostics redaction, and cross-platform executor hardening
-- Diagnostics export
+- Diagnostics export with trigger/condition summaries and hashed SSIDs by default
 
 Beta success criteria:
 
 - Reliable daily use for common docked/undocked workflows
 - Clear handling of unsupported platform features
 - No common bad-layout traps without recovery guidance
+- Automation can react to common local context without scripts or arbitrary predicates
 
 ---
 

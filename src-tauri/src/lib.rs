@@ -1,4 +1,5 @@
 mod app_menu;
+mod automation_monitor;
 mod commands;
 mod display_engine;
 mod errors;
@@ -13,6 +14,7 @@ pub fn run() {
         .setup(|app| {
             app_menu::setup(app)?;
             tray::setup(app)?;
+            automation_monitor::setup(app.handle().clone());
             Ok(())
         })
         .on_menu_event(|app, event| {

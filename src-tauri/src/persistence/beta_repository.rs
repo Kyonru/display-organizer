@@ -8,9 +8,9 @@ use uuid::Uuid;
 
 use crate::display_engine::automation::current_platform;
 use crate::display_engine::models::{
-    ApplyLayoutResult, AutomationEvent, AutomationEventType, AutomationRule, AutomationRuleDraft,
-    DiagnosticsBundle, DiagnosticsDisplaySnapshot, DiagnosticsProfileSummary, Display,
-    LayoutProfile, ProfileAction, RecoveryState,
+    ApplyLayoutResult, AutomationCondition, AutomationEvent, AutomationEventType, AutomationRule,
+    AutomationRuleDraft, AutomationTrigger, DiagnosticsBundle, DiagnosticsDisplaySnapshot,
+    DiagnosticsProfileSummary, Display, LayoutProfile, ProfileAction, RecoveryState,
 };
 use crate::errors::AppError;
 use crate::persistence::profile_repository;
@@ -86,6 +86,11 @@ pub fn save_automation_rule(draft: AutomationRuleDraft) -> Result<AutomationRule
             rule.enabled = draft.enabled;
             rule.profile_id = draft.profile_id;
             rule.match_config = draft.match_config;
+            rule.triggers = draft.triggers;
+            rule.conditions = draft.conditions;
+            rule.confirmation_mode = draft.confirmation_mode;
+            rule.cooldown_ms = draft.cooldown_ms;
+            rule.last_matched_signature = None;
             rule.updated_at = now;
             rule.clone()
         } else {
@@ -100,9 +105,14 @@ pub fn save_automation_rule(draft: AutomationRuleDraft) -> Result<AutomationRule
             enabled: draft.enabled,
             profile_id: draft.profile_id,
             match_config: draft.match_config,
+            triggers: draft.triggers,
+            conditions: draft.conditions,
+            confirmation_mode: draft.confirmation_mode,
+            cooldown_ms: draft.cooldown_ms,
             created_at: now.clone(),
             updated_at: now,
             last_triggered_at: None,
+            last_matched_signature: None,
         };
         rules.insert(0, rule.clone());
         rule
@@ -110,6 +120,16 @@ pub fn save_automation_rule(draft: AutomationRuleDraft) -> Result<AutomationRule
 
     write_json(automation_rules_path()?, &rules)?;
     Ok(saved)
+}
+
+pub fn mark_automation_rule_matched(id: &str, signature: &str) -> Result<(), AppError> {
+    let mut rules = get_automation_rules()?;
+    if let Some(rule) = rules.iter_mut().find(|rule| rule.id == id) {
+        rule.last_matched_signature = Some(signature.to_string());
+        rule.updated_at = Utc::now().to_rfc3339();
+        write_json(automation_rules_path()?, &rules)?;
+    }
+    Ok(())
 }
 
 pub fn mark_automation_rule_triggered(id: &str) -> Result<(), AppError> {
@@ -230,7 +250,10 @@ pub fn export_diagnostics(
                 last_applied_at: profile.last_applied_at,
             })
             .collect(),
-        automation_rules,
+        automation_rules: automation_rules
+            .into_iter()
+            .map(redact_automation_rule)
+            .collect(),
         recent_events,
         recovery_state,
     })
@@ -268,10 +291,44 @@ fn action_app_name(action: &ProfileAction) -> Option<String> {
     }
 }
 
+fn redact_automation_rule(mut rule: AutomationRule) -> AutomationRule {
+    rule.triggers = rule
+        .triggers
+        .into_iter()
+        .map(redact_automation_trigger)
+        .collect();
+    rule.conditions = rule
+        .conditions
+        .into_iter()
+        .map(redact_automation_condition)
+        .collect();
+    rule
+}
+
+fn redact_automation_trigger(trigger: AutomationTrigger) -> AutomationTrigger {
+    match trigger {
+        AutomationTrigger::NetworkContext { ssid, contains } => AutomationTrigger::NetworkContext {
+            ssid: format!("ssid-hash-{}", hash_id(&ssid)),
+            contains,
+        },
+        other => other,
+    }
+}
+
+fn redact_automation_condition(condition: AutomationCondition) -> AutomationCondition {
+    match condition {
+        AutomationCondition::WifiSsid { ssid, contains } => AutomationCondition::WifiSsid {
+            ssid: format!("ssid-hash-{}", hash_id(&ssid)),
+            contains,
+        },
+        other => other,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::display_engine::models::{
-        AutomationEventType, AutomationRuleDraft, AutomationRuleMatch, Display,
+        AutomationEventType, AutomationRuleDraft, AutomationRuleMatch, ConfirmationMode, Display,
         DisplayCapabilities, DisplayCapability, DisplayConnectionType, DisplayRotation, Layout,
         Point, Rect, Size,
     };
@@ -332,6 +389,10 @@ mod tests {
                 dock_signature: None,
                 platform: None,
             },
+            triggers: Vec::new(),
+            conditions: Vec::new(),
+            confirmation_mode: ConfirmationMode::Confirm,
+            cooldown_ms: 600_000,
         })
         .expect("save automation rule");
 

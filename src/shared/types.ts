@@ -162,15 +162,103 @@ export type AutomationRuleMatch = {
   platform: PlatformName | null;
 };
 
+export type ConfirmationMode = "confirm" | "auto";
+export type AppEventKind = "opened" | "closed" | "running";
+export type AppLifecycleKind = "app_launch" | "system_wake";
+export type PowerSourceState = "ac" | "battery" | "charging";
+
+export type AutomationTrigger =
+  | {
+      type: "display_setup_changed";
+      displayStableIds?: string[];
+      displayCount?: number | null;
+      requireInternal?: boolean | null;
+      requireExternal?: boolean | null;
+      platform?: PlatformName | null;
+    }
+  | {
+      type: "time_schedule";
+      exactTime?: string | null;
+      startTime?: string | null;
+      endTime?: string | null;
+      weekdays?: number[];
+    }
+  | {
+      type: "app_event";
+      appName: string;
+      event: AppEventKind;
+    }
+  | {
+      type: "app_lifecycle";
+      event: AppLifecycleKind;
+    }
+  | {
+      type: "power_source";
+      source: PowerSourceState;
+    }
+  | {
+      type: "network_context";
+      ssid: string;
+      contains?: boolean;
+    };
+
+export type AutomationCondition =
+  | {
+      type: "display_count";
+      count: number;
+    }
+  | {
+      type: "display_ids";
+      stableIds: string[];
+      exact?: boolean;
+    }
+  | {
+      type: "internal_display";
+      required: boolean;
+    }
+  | {
+      type: "external_display";
+      required: boolean;
+    }
+  | {
+      type: "platform";
+      platform: PlatformName;
+    }
+  | {
+      type: "time_window";
+      startTime: string;
+      endTime: string;
+      weekdays?: number[];
+    }
+  | {
+      type: "app_running";
+      appName: string;
+      running: boolean;
+    }
+  | {
+      type: "power_source";
+      source: PowerSourceState;
+    }
+  | {
+      type: "wifi_ssid";
+      ssid: string;
+      contains?: boolean;
+    };
+
 export type AutomationRule = {
   id: string;
   name: string;
   enabled: boolean;
   profileId: string;
   match: AutomationRuleMatch;
+  triggers: AutomationTrigger[];
+  conditions: AutomationCondition[];
+  confirmationMode: ConfirmationMode;
+  cooldownMs: number;
   createdAt: string;
   updatedAt: string;
   lastTriggeredAt: string | null;
+  lastMatchedSignature: string | null;
 };
 
 export type AutomationRuleDraft = {
@@ -179,6 +267,10 @@ export type AutomationRuleDraft = {
   enabled: boolean;
   profileId: string;
   match: AutomationRuleMatch;
+  triggers?: AutomationTrigger[];
+  conditions?: AutomationCondition[];
+  confirmationMode?: ConfirmationMode;
+  cooldownMs?: number;
 };
 
 export type AutomationMatchResult = {
@@ -186,6 +278,12 @@ export type AutomationMatchResult = {
   profileName: string;
   score: number;
   reason: string;
+  matchedTriggers: string[];
+  matchedConditions: string[];
+  skippedReasons: string[];
+  requiresConfirmation: boolean;
+  cooldownRemainingMs: number | null;
+  matchSignature: string;
 };
 
 export type AutomationEvaluation = {

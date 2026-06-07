@@ -446,6 +446,135 @@ pub struct AutomationRuleMatch {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum ConfirmationMode {
+    Confirm,
+    Auto,
+}
+
+fn default_confirmation_mode() -> ConfirmationMode {
+    ConfirmationMode::Confirm
+}
+
+fn default_cooldown_ms() -> u64 {
+    600_000
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[serde(rename_all = "snake_case")]
+pub enum AppEventKind {
+    Opened,
+    Closed,
+    Running,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[serde(rename_all = "snake_case")]
+pub enum AppLifecycleKind {
+    AppLaunch,
+    SystemWake,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[serde(rename_all = "snake_case")]
+pub enum PowerSourceState {
+    Ac,
+    Battery,
+    Charging,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(
+    tag = "type",
+    rename_all = "snake_case",
+    rename_all_fields = "camelCase"
+)]
+pub enum AutomationTrigger {
+    DisplaySetupChanged {
+        #[serde(default)]
+        display_stable_ids: Vec<String>,
+        #[serde(default)]
+        display_count: Option<usize>,
+        #[serde(default)]
+        require_internal: Option<bool>,
+        #[serde(default)]
+        require_external: Option<bool>,
+        #[serde(default)]
+        platform: Option<PlatformName>,
+    },
+    TimeSchedule {
+        #[serde(default)]
+        exact_time: Option<String>,
+        #[serde(default)]
+        start_time: Option<String>,
+        #[serde(default)]
+        end_time: Option<String>,
+        #[serde(default)]
+        weekdays: Vec<u32>,
+    },
+    AppEvent {
+        app_name: String,
+        event: AppEventKind,
+    },
+    AppLifecycle {
+        event: AppLifecycleKind,
+    },
+    PowerSource {
+        source: PowerSourceState,
+    },
+    NetworkContext {
+        ssid: String,
+        #[serde(default)]
+        contains: bool,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(
+    tag = "type",
+    rename_all = "snake_case",
+    rename_all_fields = "camelCase"
+)]
+pub enum AutomationCondition {
+    DisplayCount {
+        count: usize,
+    },
+    DisplayIds {
+        #[serde(default)]
+        stable_ids: Vec<String>,
+        #[serde(default)]
+        exact: bool,
+    },
+    InternalDisplay {
+        required: bool,
+    },
+    ExternalDisplay {
+        required: bool,
+    },
+    Platform {
+        platform: PlatformName,
+    },
+    TimeWindow {
+        start_time: String,
+        end_time: String,
+        #[serde(default)]
+        weekdays: Vec<u32>,
+    },
+    AppRunning {
+        app_name: String,
+        running: bool,
+    },
+    PowerSource {
+        source: PowerSourceState,
+    },
+    WifiSsid {
+        ssid: String,
+        #[serde(default)]
+        contains: bool,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct AutomationRule {
     pub id: String,
@@ -454,9 +583,20 @@ pub struct AutomationRule {
     pub profile_id: String,
     #[serde(rename = "match")]
     pub match_config: AutomationRuleMatch,
+    #[serde(default)]
+    pub triggers: Vec<AutomationTrigger>,
+    #[serde(default)]
+    pub conditions: Vec<AutomationCondition>,
+    #[serde(default = "default_confirmation_mode")]
+    pub confirmation_mode: ConfirmationMode,
+    #[serde(default = "default_cooldown_ms")]
+    pub cooldown_ms: u64,
     pub created_at: String,
     pub updated_at: String,
+    #[serde(default)]
     pub last_triggered_at: Option<String>,
+    #[serde(default)]
+    pub last_matched_signature: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -469,6 +609,14 @@ pub struct AutomationRuleDraft {
     pub profile_id: String,
     #[serde(rename = "match")]
     pub match_config: AutomationRuleMatch,
+    #[serde(default)]
+    pub triggers: Vec<AutomationTrigger>,
+    #[serde(default)]
+    pub conditions: Vec<AutomationCondition>,
+    #[serde(default = "default_confirmation_mode")]
+    pub confirmation_mode: ConfirmationMode,
+    #[serde(default = "default_cooldown_ms")]
+    pub cooldown_ms: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -478,6 +626,18 @@ pub struct AutomationMatchResult {
     pub profile_name: String,
     pub score: u32,
     pub reason: String,
+    #[serde(default)]
+    pub matched_triggers: Vec<String>,
+    #[serde(default)]
+    pub matched_conditions: Vec<String>,
+    #[serde(default)]
+    pub skipped_reasons: Vec<String>,
+    #[serde(default)]
+    pub requires_confirmation: bool,
+    #[serde(default)]
+    pub cooldown_remaining_ms: Option<u64>,
+    #[serde(default)]
+    pub match_signature: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

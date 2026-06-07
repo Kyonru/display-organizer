@@ -1,11 +1,13 @@
 import type {
   AppSettings,
   ApplyLayoutResult,
+  AutomationCondition,
   AutomationEvaluation,
   AutomationEvent,
   AutomationEventType,
   AutomationRule,
   AutomationRuleDraft,
+  AutomationTrigger,
   DiagnosticsBundle,
   Display,
   Layout,
@@ -182,14 +184,48 @@ function readAutomationRules(): AutomationRule[] {
   }
 
   try {
-    return JSON.parse(raw) as AutomationRule[];
+    return (JSON.parse(raw) as AutomationRule[]).map(normalizeAutomationRule);
   } catch {
     return [];
   }
 }
 
 function writeAutomationRules(rules: AutomationRule[]) {
-  window.localStorage.setItem(AUTOMATION_STORAGE_KEY, JSON.stringify(rules));
+  window.localStorage.setItem(AUTOMATION_STORAGE_KEY, JSON.stringify(rules.map(normalizeAutomationRule)));
+}
+
+function defaultAutomationMatch(): AutomationRule["match"] {
+  return {
+    displayStableIds: [],
+    displayCount: null,
+    requireInternal: null,
+    requireExternal: null,
+    dockSignature: null,
+    platform: null,
+  };
+}
+
+function normalizeAutomationRule(rule: AutomationRule): AutomationRule {
+  return {
+    ...rule,
+    match: { ...defaultAutomationMatch(), ...(rule.match ?? {}) },
+    triggers: rule.triggers ?? [],
+    conditions: rule.conditions ?? [],
+    confirmationMode: rule.confirmationMode ?? "confirm",
+    cooldownMs: rule.cooldownMs ?? 600_000,
+    lastMatchedSignature: rule.lastMatchedSignature ?? null,
+  };
+}
+
+function normalizeAutomationDraft(draft: AutomationRuleDraft): Required<Omit<AutomationRuleDraft, "id">> & { id?: string | null } {
+  return {
+    ...draft,
+    match: { ...defaultAutomationMatch(), ...(draft.match ?? {}) },
+    triggers: draft.triggers ?? [],
+    conditions: draft.conditions ?? [],
+    confirmationMode: draft.confirmationMode ?? "confirm",
+    cooldownMs: draft.cooldownMs ?? 600_000,
+  };
 }
 
 function readAutomationEvents(): AutomationEvent[] {
@@ -516,27 +552,38 @@ export function getMockAutomationRules(): Promise<AutomationRule[]> {
 }
 
 export function saveMockAutomationRule(draft: AutomationRuleDraft): Promise<AutomationRule> {
+  const normalizedDraft = normalizeAutomationDraft(draft);
   const rules = readAutomationRules();
   const timestamp = now();
-  const existing = draft.id ? rules.find((rule) => rule.id === draft.id) : null;
+  const existing = normalizedDraft.id ? rules.find((rule) => rule.id === normalizedDraft.id) : null;
   const rule: AutomationRule = existing
     ? {
         ...existing,
-        name: draft.name,
-        enabled: draft.enabled,
-        profileId: draft.profileId,
-        match: draft.match,
+        name: normalizedDraft.name,
+        enabled: normalizedDraft.enabled,
+        profileId: normalizedDraft.profileId,
+        match: normalizedDraft.match,
+        triggers: normalizedDraft.triggers,
+        conditions: normalizedDraft.conditions,
+        confirmationMode: normalizedDraft.confirmationMode,
+        cooldownMs: normalizedDraft.cooldownMs,
+        lastMatchedSignature: null,
         updatedAt: timestamp,
       }
     : {
         id: id(),
-        name: draft.name,
-        enabled: draft.enabled,
-        profileId: draft.profileId,
-        match: draft.match,
+        name: normalizedDraft.name,
+        enabled: normalizedDraft.enabled,
+        profileId: normalizedDraft.profileId,
+        match: normalizedDraft.match,
+        triggers: normalizedDraft.triggers,
+        conditions: normalizedDraft.conditions,
+        confirmationMode: normalizedDraft.confirmationMode,
+        cooldownMs: normalizedDraft.cooldownMs,
         createdAt: timestamp,
         updatedAt: timestamp,
         lastTriggeredAt: null,
+        lastMatchedSignature: null,
       };
 
   writeAutomationRules(existing ? rules.map((item) => (item.id === rule.id ? rule : item)) : [rule, ...rules]);
@@ -549,25 +596,87 @@ export function deleteMockAutomationRule(ruleId: string): Promise<void> {
 }
 
 function ruleMatches(rule: AutomationRule, profiles: LayoutProfile[]) {
-  if (!rule.enabled || !profiles.some((profile) => profile.id === rule.profileId)) {
+  const normalizedRule = normalizeAutomationRule(rule);
+  if (!normalizedRule.enabled || !profiles.some((profile) => profile.id === normalizedRule.profileId)) {
     return false;
   }
 
   const displayIds = new Set(mockDisplays.map((display) => display.stableId ?? display.id));
-  const expectedIds = new Set(rule.match.displayStableIds);
+  const expectedIds = new Set(normalizedRule.match.displayStableIds);
   const idsMatch =
     expectedIds.size === 0 ||
     (expectedIds.size === displayIds.size && [...expectedIds].every((displayId) => displayIds.has(displayId)));
 
   return (
     idsMatch &&
-    (rule.match.displayCount === null || rule.match.displayCount === mockDisplays.length) &&
-    (rule.match.requireInternal === null ||
-      mockDisplays.some((display) => display.isInternal) === rule.match.requireInternal) &&
-    (rule.match.requireExternal === null ||
-      mockDisplays.some((display) => !display.isInternal) === rule.match.requireExternal) &&
-    (rule.match.platform === null || rule.match.platform === "macos")
+    (normalizedRule.match.displayCount === null || normalizedRule.match.displayCount === mockDisplays.length) &&
+    (normalizedRule.match.requireInternal === null ||
+      mockDisplays.some((display) => display.isInternal) === normalizedRule.match.requireInternal) &&
+    (normalizedRule.match.requireExternal === null ||
+      mockDisplays.some((display) => !display.isInternal) === normalizedRule.match.requireExternal) &&
+    (normalizedRule.match.platform === null || normalizedRule.match.platform === "macos") &&
+    automationTriggersMatch(normalizedRule.triggers) &&
+    automationConditionsMatch(normalizedRule.conditions)
   );
+}
+
+function automationTriggersMatch(triggers: AutomationTrigger[]) {
+  if (triggers.length === 0) {
+    return true;
+  }
+
+  return triggers.some((trigger) => {
+    if (trigger.type === "display_setup_changed") {
+      return (
+        (trigger.displayCount == null || trigger.displayCount === mockDisplays.length) &&
+        (trigger.platform == null || trigger.platform === "macos")
+      );
+    }
+    if (trigger.type === "time_schedule") {
+      return true;
+    }
+    if (trigger.type === "app_lifecycle") {
+      return trigger.event === "app_launch";
+    }
+    if (trigger.type === "power_source") {
+      return trigger.source === "ac";
+    }
+    if (trigger.type === "network_context") {
+      return trigger.ssid.trim().length > 0;
+    }
+    if (trigger.type === "app_event") {
+      return trigger.event === "running";
+    }
+    return false;
+  });
+}
+
+function automationConditionsMatch(conditions: AutomationCondition[]) {
+  return conditions.every((condition) => {
+    if (condition.type === "display_count") {
+      return condition.count === mockDisplays.length;
+    }
+    if (condition.type === "platform") {
+      return condition.platform === "macos";
+    }
+    if (condition.type === "internal_display") {
+      return mockDisplays.some((display) => display.isInternal) === condition.required;
+    }
+    if (condition.type === "external_display") {
+      return mockDisplays.some((display) => !display.isInternal) === condition.required;
+    }
+    if (condition.type === "display_ids") {
+      const displayIds = new Set(mockDisplays.map((display) => display.stableId ?? display.id));
+      return condition.stableIds.every((displayId) => displayIds.has(displayId));
+    }
+    if (condition.type === "power_source") {
+      return condition.source === "ac";
+    }
+    if (condition.type === "wifi_ssid") {
+      return condition.ssid.trim().length > 0;
+    }
+    return true;
+  });
 }
 
 export function evaluateMockAutomationRules(): Promise<AutomationEvaluation> {
@@ -578,7 +687,13 @@ export function evaluateMockAutomationRules(): Promise<AutomationEvaluation> {
       rule,
       profileName: profiles.find((profile) => profile.id === rule.profileId)?.name ?? "Profile",
       score: 100 + (rule.match.displayCount === null ? 0 : 10),
-      reason: "exact display set",
+      reason: (rule.triggers ?? []).length > 0 ? "automation preset" : "exact display set",
+      matchedTriggers: (rule.triggers ?? []).map((trigger) => trigger.type),
+      matchedConditions: (rule.conditions ?? []).map((condition) => condition.type),
+      skippedReasons: [],
+      requiresConfirmation: (rule.confirmationMode ?? "confirm") === "confirm",
+      cooldownRemainingMs: null,
+      matchSignature: `${rule.id}-${Date.now()}`,
     }))
     .sort((left, right) => right.score - left.score);
 
